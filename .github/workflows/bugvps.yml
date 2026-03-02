@@ -24,9 +24,10 @@ jobs:
     - name: Checkout Private Storage Repo (Repo 2)
       uses: actions/checkout@v4
       with:
-        repository: AADI-playz23/vps-disk # Your PRIVATE Repo Name
-        token: ${{ secrets.STORAGE_PATH }} # Add this PAT to Repo 1's Action Secrets
+        repository: YOUR_GITHUB_USERNAME/vps-storage # IMPORTANT: Replace with your actual Private Repo 2 name
+        token: ${{ secrets.STORAGE_PAT }}
         path: storage_repo
+        ref: main # THE FIX: This forces the runner to attach to the live main branch!
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
@@ -68,9 +69,14 @@ jobs:
           exit 1
         fi
         
+        echo "Successfully generated NEW Tunnel URL: $TUNNEL_URL"
+        
         # Move into Private Repo to save the data securely
         cd ../storage_repo
         git pull origin main
+
+        # Force delete the old session file to guarantee Git sees the change
+        rm -f "session/${{ github.event.inputs.username }}.txt"
 
         mkdir -p session
         echo "$TUNNEL_URL" > "session/${{ github.event.inputs.username }}.txt"
@@ -82,7 +88,9 @@ jobs:
 
         git add session/ "users/${{ github.event.inputs.username }}/"
         git commit -m "Update session for ${{ github.event.inputs.username }}" || echo "No changes to commit"
-        git push origin main
+        
+        # THE FIX: Aggressive push ensuring the exact current state is uploaded
+        git push origin HEAD:main
 
     - name: Keep Compute Runner Alive
       run: |
