@@ -24,7 +24,7 @@ jobs:
     - name: Checkout Private Storage Repo (Repo 2)
       uses: actions/checkout@v4
       with:
-        repository: AADI-play23/vps-disk # Your PRIVATE Repo Name
+        repository: AADI-playz23/vps-disk # Your PRIVATE Repo Name
         token: ${{ secrets.STORAGE_PATH }} # Add this PAT to Repo 1's Action Secrets
         path: storage_repo
 
