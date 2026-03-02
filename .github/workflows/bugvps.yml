@@ -1,0 +1,93 @@
+name: BUGVPS Compute Node
+
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: 'User Name'
+        required: true
+
+concurrency:
+  group: vps-${{ github.event.inputs.username }}
+  cancel-in-progress: true
+
+jobs:
+  run-vps:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Compute Repo (Repo 1)
+      uses: actions/checkout@v4
+      with:
+        path: compute_repo
+
+    - name: Checkout Private Storage Repo (Repo 2)
+      uses: actions/checkout@v4
+      with:
+        repository: YOUR_GITHUB_USERNAME/bugvps-storage # Your PRIVATE Repo Name
+        token: ${{ secrets.STORAGE_PAT }} # Add this PAT to Repo 1's Action Secrets
+        path: storage_repo
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install Node Dependencies
+      run: |
+        cd compute_repo
+        npm install ws
+
+    - name: Start Node Server & Tunnel
+      env:
+        VPS_USER: ${{ github.event.inputs.username }}
+      run: |
+        # Configure Git for Private Repo Storage updates later
+        cd storage_repo
+        git config user.name "BugVPS Auto-System"
+        git config user.email "system@bugvps.local"
+        
+        cd ../compute_repo
+        # We pass the path to Repo 2 so Node builds the workspace inside the private repo
+        STORAGE_PATH="../storage_repo" nohup node server.js > server.log 2>&1 &
+        echo "Node.js compute core booted."
+        
+        # Start localhost.run SSH Tunnel
+        ssh -R 80:localhost:8765 nokey@localhost.run -o StrictHostKeyChecking=no -T > tunnel.log 2>&1 &
+        echo "Waiting for tunnel initialization..."
+        sleep 15
+
+    - name: Push Session and Workspace to Private Repo
+      run: |
+        cd compute_repo
+        TUNNEL_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.lhr\.life' tunnel.log | head -n 1)
+        
+        if [ -z "$TUNNEL_URL" ]; then
+          echo "Error: Tunnel URL generation failed. See log:"
+          cat tunnel.log
+          exit 1
+        fi
+        
+        # Move into Private Repo to save the data securely
+        cd ../storage_repo
+        git pull origin main
+
+        mkdir -p session
+        echo "$TUNNEL_URL" > "session/${{ github.event.inputs.username }}.txt"
+
+        mkdir -p "users/${{ github.event.inputs.username }}"
+        if [ ! -f "users/${{ github.event.inputs.username }}/welcome.txt" ]; then
+          echo "Welcome to BUGVPS! Your secure, private storage is ready." > "users/${{ github.event.inputs.username }}/welcome.txt"
+        fi
+
+        git add session/ "users/${{ github.event.inputs.username }}/"
+        git commit -m "Update session for ${{ github.event.inputs.username }}" || echo "No changes to commit"
+        git push origin main
+
+    - name: Keep Compute Runner Alive
+      run: |
+        echo "Compute node is live! Waiting for frontend handshake..."
+        while pgrep -f "node server.js" > /dev/null; do
+          sleep 5
+        done
+        echo "Session terminated."
