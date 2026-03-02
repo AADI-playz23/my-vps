@@ -7,6 +7,7 @@ on:
         description: 'User Name'
         required: true
 
+# Isolates sessions: Kills ONLY the old VPS belonging to this specific user
 concurrency:
   group: vps-${{ github.event.inputs.username }}
   cancel-in-progress: true
@@ -24,10 +25,11 @@ jobs:
     - name: Checkout Private Storage Repo (Repo 2)
       uses: actions/checkout@v4
       with:
-        repository: YOUR_GITHUB_USERNAME/vps-storage # IMPORTANT: Replace with your actual Private Repo 2 name
+        # IMPORTANT: Replace with your actual Private Repo 2 name (e.g., AADI-playz23/vps-storage)
+        repository: YOUR_GITHUB_USERNAME/vps-storage 
         token: ${{ secrets.STORAGE_PAT }}
         path: storage_repo
-        ref: main # THE FIX: This forces the runner to attach to the live main branch!
+        ref: main 
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
@@ -43,14 +45,14 @@ jobs:
       env:
         VPS_USER: ${{ github.event.inputs.username }}
       run: |
-        # Configure Git for Private Repo Storage updates later
         cd storage_repo
-        git config user.name "BugVPS Auto-System"
+        git config user.name "BUGVPS Auto-System"
         git config user.email "system@bugvps.local"
         
         cd ../compute_repo
-        # We pass the path to Repo 2 so Node builds the workspace inside the private repo
-        STORAGE_PATH="../storage_repo" nohup node server.js > server.log 2>&1 &
+        
+        # THE FIX: Absolute hardcoded path to prevent Temp Storage mapping!
+        STORAGE_PATH="${{ github.workspace }}/storage_repo" nohup node server.js > server.log 2>&1 &
         echo "Node.js compute core booted."
         
         # Start localhost.run SSH Tunnel
@@ -89,7 +91,7 @@ jobs:
         git add session/ "users/${{ github.event.inputs.username }}/"
         git commit -m "Update session for ${{ github.event.inputs.username }}" || echo "No changes to commit"
         
-        # THE FIX: Aggressive push ensuring the exact current state is uploaded
+        # Aggressive push ensuring the exact current state is uploaded
         git push origin HEAD:main
 
     - name: Keep Compute Runner Alive
