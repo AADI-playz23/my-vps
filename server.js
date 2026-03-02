@@ -5,13 +5,19 @@ const path = require('path');
 
 const PORT = 8765;
 
-const BASE_DIR = process.env.STORAGE_PATH ? path.resolve(process.cwd(), process.env.STORAGE_PATH) : process.cwd();
+// Absolute path targeting ensures files NEVER end up in runner temp storage
+const BASE_DIR = process.env.STORAGE_PATH ? path.resolve(process.env.STORAGE_PATH) : process.cwd();
 const USERNAME = process.env.VPS_USER || "guest";
 const WORKSPACE_DIR = path.resolve(BASE_DIR, "users", USERNAME);
 
 if (!fs.existsSync(WORKSPACE_DIR)) {
     fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 }
+
+try {
+    execSync(`git config user.name "BUGVPS Auto-Daemon"`, { cwd: BASE_DIR });
+    execSync(`git config user.email "system@bugvps.local"`, { cwd: BASE_DIR });
+} catch(e) {}
 
 function toVirtual(realPath) {
     let rel = path.relative(WORKSPACE_DIR, realPath).replace(/\\/g, '/');
@@ -25,21 +31,41 @@ function toReal(virtualPath) {
     return realPath;
 }
 
-// REAL-TIME BACKGROUND SYNC (Does not freeze the websocket)
-function syncToGithubAsync(actionMsg) {
-    const cmd = `git pull origin main --rebase && git add "users/${USERNAME}" && git commit -m "[Real-Time] ${actionMsg} by ${USERNAME}" && git push`;
-    exec(cmd, { cwd: BASE_DIR }, (error) => {
-        if (error) console.error("Auto-sync error:", error.message);
-        else console.log(`Real-time sync complete: ${actionMsg}`);
-    });
-}
-
 const wss = new WebSocket.Server({ port: PORT });
 console.log(`Compute Node Active. Storage mounted at ${BASE_DIR}`);
 
+// --- 3-SECOND REAL-TIME AUTO-SYNC DAEMON ---
+let isSyncing = false;
+
+setInterval(() => {
+    if (isSyncing) return; // Prevent overlapping git commands
+    
+    try {
+        // Check if ANY files changed in the background (via bash or UI)
+        const status = execSync(`git status --porcelain "users/${USERNAME}"`, { cwd: BASE_DIR }).toString().trim();
+        
+        if (status.length > 0) {
+            isSyncing = true;
+            execSync(`git add "users/${USERNAME}"`, { cwd: BASE_DIR, stdio: 'ignore' });
+            execSync(`git commit -m "[Auto-Sync] Workspace updated by ${USERNAME}"`, { cwd: BASE_DIR, stdio: 'ignore' });
+            execSync(`git push origin HEAD:main`, { cwd: BASE_DIR, stdio: 'ignore' });
+            
+            // Broadcast to frontend to refresh the File Manager UI silently
+            wss.clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({ type: "fm_refresh_trigger" }));
+                }
+            });
+            isSyncing = false;
+        }
+    } catch (e) {
+        isSyncing = false;
+    }
+}, 3000);
+
 wss.on('connection', (ws) => {
     let currentDir = WORKSPACE_DIR;
-    ws.send(JSON.stringify({ type: "shell", data: "BUGVPS OS Initialized...\n[PRIVATE STORAGE MOUNTED]\n[REAL-TIME SYNC ENABLED]\nWorkspace securely mounted at /\n\n" }));
+    ws.send(JSON.stringify({ type: "shell", data: "BUGVPS OS Initialized...\n[PRIVATE VAULT SECURED]\n[3-SEC AUTO-SYNC DAEMON ACTIVE]\nWorkspace mounted at /\n\n" }));
 
     ws.on('message', (message) => {
         try {
@@ -48,6 +74,7 @@ wss.on('connection', (ws) => {
 
             if (msgType === "ping") return;
 
+            // Manual File Manager controls
             if (msgType === "fm") {
                 const action = data.action;
                 const absPath = toReal(data.path || "/");
@@ -71,35 +98,22 @@ wss.on('connection', (ws) => {
                         }
                     } else if (action === "write") {
                         fs.writeFileSync(absPath, data.content || '', 'utf8');
-                        syncToGithubAsync(`Edited file ${path.basename(absPath)}`); // Real-time
-                        ws.send(JSON.stringify({ type: "fm_msg", message: `Saved: ${path.basename(absPath)}` }));
                     } else if (action === "create_file") {
-                        if (!fs.existsSync(absPath)) {
-                            fs.writeFileSync(absPath, '', 'utf8');
-                            syncToGithubAsync(`Created file ${path.basename(absPath)}`); // Real-time
-                            ws.send(JSON.stringify({ type: "fm_msg", message: `Created File: ${path.basename(absPath)}` }));
-                        }
+                        if (!fs.existsSync(absPath)) fs.writeFileSync(absPath, '', 'utf8');
                     } else if (action === "create_dir") {
-                        if (!fs.existsSync(absPath)) {
-                            fs.mkdirSync(absPath, { recursive: true });
-                            syncToGithubAsync(`Created folder ${path.basename(absPath)}`); // Real-time
-                            ws.send(JSON.stringify({ type: "fm_msg", message: `Created Folder: ${path.basename(absPath)}` }));
-                        }
+                        if (!fs.existsSync(absPath)) fs.mkdirSync(absPath, { recursive: true });
                     } else if (action === "delete") {
-                        if (fs.statSync(absPath).isDirectory()) {
-                            fs.rmSync(absPath, { recursive: true, force: true });
-                        } else {
-                            fs.unlinkSync(absPath);
-                        }
-                        syncToGithubAsync(`Deleted ${path.basename(absPath)}`); // Real-time
-                        ws.send(JSON.stringify({ type: "fm_msg", message: `Deleted: ${path.basename(absPath)}` }));
+                        if (fs.statSync(absPath).isDirectory()) fs.rmSync(absPath, { recursive: true, force: true });
+                        else fs.unlinkSync(absPath);
                     }
+                    // We no longer trigger sync here manually. The 3-second daemon will catch it automatically!
                 } catch (fsErr) {
                     ws.send(JSON.stringify({ type: "fm_error", message: fsErr.message }));
                 }
                 return;
             }
 
+            // Terminal Command handling
             const cmd = data.cmd;
             if (!cmd) return;
 
