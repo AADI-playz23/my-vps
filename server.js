@@ -5,7 +5,6 @@ const path = require('path');
 
 const PORT = 8765;
 
-// READ STORAGE PATH FROM GITHUB ACTION, FALLBACK TO LOCAL CWD
 const BASE_DIR = process.env.STORAGE_PATH ? path.resolve(process.cwd(), process.env.STORAGE_PATH) : process.cwd();
 const USERNAME = process.env.VPS_USER || "guest";
 const WORKSPACE_DIR = path.resolve(BASE_DIR, "users", USERNAME);
@@ -26,17 +25,13 @@ function toReal(virtualPath) {
     return realPath;
 }
 
-function syncToGithub() {
-    try {
-        console.log(`Syncing ${USERNAME}'s private storage...`);
-        execSync(`git pull origin main --rebase`, { cwd: BASE_DIR, stdio: 'ignore' });
-        execSync(`git add "users/${USERNAME}"`, { cwd: BASE_DIR, stdio: 'ignore' });
-        execSync(`git commit -m "Auto-save private workspace for ${USERNAME}"`, { cwd: BASE_DIR, stdio: 'ignore' });
-        execSync(`git push`, { cwd: BASE_DIR, stdio: 'ignore' });
-        return true;
-    } catch (e) {
-        return false;
-    }
+// REAL-TIME BACKGROUND SYNC (Does not freeze the websocket)
+function syncToGithubAsync(actionMsg) {
+    const cmd = `git pull origin main --rebase && git add "users/${USERNAME}" && git commit -m "[Real-Time] ${actionMsg} by ${USERNAME}" && git push`;
+    exec(cmd, { cwd: BASE_DIR }, (error) => {
+        if (error) console.error("Auto-sync error:", error.message);
+        else console.log(`Real-time sync complete: ${actionMsg}`);
+    });
 }
 
 const wss = new WebSocket.Server({ port: PORT });
@@ -44,7 +39,7 @@ console.log(`Compute Node Active. Storage mounted at ${BASE_DIR}`);
 
 wss.on('connection', (ws) => {
     let currentDir = WORKSPACE_DIR;
-    ws.send(JSON.stringify({ type: "shell", data: "BUGVPS OS Initialized...\n[PRIVATE STORAGE MOUNTED]\nWorkspace securely mounted at /\n\n" }));
+    ws.send(JSON.stringify({ type: "shell", data: "BUGVPS OS Initialized...\n[PRIVATE STORAGE MOUNTED]\n[REAL-TIME SYNC ENABLED]\nWorkspace securely mounted at /\n\n" }));
 
     ws.on('message', (message) => {
         try {
@@ -76,24 +71,32 @@ wss.on('connection', (ws) => {
                         }
                     } else if (action === "write") {
                         fs.writeFileSync(absPath, data.content || '', 'utf8');
+                        syncToGithubAsync(`Edited file ${path.basename(absPath)}`); // Real-time
                         ws.send(JSON.stringify({ type: "fm_msg", message: `Saved: ${path.basename(absPath)}` }));
+                    } else if (action === "create_file") {
+                        if (!fs.existsSync(absPath)) {
+                            fs.writeFileSync(absPath, '', 'utf8');
+                            syncToGithubAsync(`Created file ${path.basename(absPath)}`); // Real-time
+                            ws.send(JSON.stringify({ type: "fm_msg", message: `Created File: ${path.basename(absPath)}` }));
+                        }
+                    } else if (action === "create_dir") {
+                        if (!fs.existsSync(absPath)) {
+                            fs.mkdirSync(absPath, { recursive: true });
+                            syncToGithubAsync(`Created folder ${path.basename(absPath)}`); // Real-time
+                            ws.send(JSON.stringify({ type: "fm_msg", message: `Created Folder: ${path.basename(absPath)}` }));
+                        }
                     } else if (action === "delete") {
                         if (fs.statSync(absPath).isDirectory()) {
                             fs.rmSync(absPath, { recursive: true, force: true });
                         } else {
                             fs.unlinkSync(absPath);
                         }
+                        syncToGithubAsync(`Deleted ${path.basename(absPath)}`); // Real-time
                         ws.send(JSON.stringify({ type: "fm_msg", message: `Deleted: ${path.basename(absPath)}` }));
                     }
                 } catch (fsErr) {
                     ws.send(JSON.stringify({ type: "fm_error", message: fsErr.message }));
                 }
-                return;
-            }
-
-            if (msgType === "sync") {
-                if (syncToGithub()) ws.send(JSON.stringify({ type: "shell", data: "\n[SYSTEM] Successfully synced workspace to Private Vault.\nroot@bugvps:~# " }));
-                else ws.send(JSON.stringify({ type: "shell", data: "\n[ERR] Sync failed.\nroot@bugvps:~# " }));
                 return;
             }
 
@@ -124,8 +127,6 @@ wss.on('connection', (ws) => {
                 if (error && !stdout && !stderr) ws.send(JSON.stringify({ type: "shell", data: `Error: ${error.message}\n` }));
             });
 
-        } catch (e) {
-            console.error("Internal error:", e);
-        }
+        } catch (e) { }
     });
 });
