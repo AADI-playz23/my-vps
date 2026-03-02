@@ -5,7 +5,6 @@ const path = require('path');
 
 const PORT = 8765;
 
-// Absolute path targeting ensures files NEVER end up in runner temp storage
 const BASE_DIR = process.env.STORAGE_PATH ? path.resolve(process.env.STORAGE_PATH) : process.cwd();
 const USERNAME = process.env.VPS_USER || "guest";
 const WORKSPACE_DIR = path.resolve(BASE_DIR, "users", USERNAME);
@@ -31,17 +30,16 @@ function toReal(virtualPath) {
     return realPath;
 }
 
-const wss = new WebSocket.Server({ port: PORT });
+// THE FIX: Explicitly bind to IPv4 (0.0.0.0) so the SSH tunnel can find it
+const wss = new WebSocket.Server({ host: '0.0.0.0', port: PORT });
 console.log(`Compute Node Active. Storage mounted at ${BASE_DIR}`);
 
-// --- 3-SECOND REAL-TIME AUTO-SYNC DAEMON ---
 let isSyncing = false;
 
 setInterval(() => {
-    if (isSyncing) return; // Prevent overlapping git commands
+    if (isSyncing) return; 
     
     try {
-        // Check if ANY files changed in the background (via bash or UI)
         const status = execSync(`git status --porcelain "users/${USERNAME}"`, { cwd: BASE_DIR }).toString().trim();
         
         if (status.length > 0) {
@@ -50,7 +48,6 @@ setInterval(() => {
             execSync(`git commit -m "[Auto-Sync] Workspace updated by ${USERNAME}"`, { cwd: BASE_DIR, stdio: 'ignore' });
             execSync(`git push origin HEAD:main`, { cwd: BASE_DIR, stdio: 'ignore' });
             
-            // Broadcast to frontend to refresh the File Manager UI silently
             wss.clients.forEach(client => {
                 if (client.readyState === WebSocket.OPEN) {
                     client.send(JSON.stringify({ type: "fm_refresh_trigger" }));
@@ -74,7 +71,6 @@ wss.on('connection', (ws) => {
 
             if (msgType === "ping") return;
 
-            // Manual File Manager controls
             if (msgType === "fm") {
                 const action = data.action;
                 const absPath = toReal(data.path || "/");
@@ -106,14 +102,12 @@ wss.on('connection', (ws) => {
                         if (fs.statSync(absPath).isDirectory()) fs.rmSync(absPath, { recursive: true, force: true });
                         else fs.unlinkSync(absPath);
                     }
-                    // We no longer trigger sync here manually. The 3-second daemon will catch it automatically!
                 } catch (fsErr) {
                     ws.send(JSON.stringify({ type: "fm_error", message: fsErr.message }));
                 }
                 return;
             }
 
-            // Terminal Command handling
             const cmd = data.cmd;
             if (!cmd) return;
 
