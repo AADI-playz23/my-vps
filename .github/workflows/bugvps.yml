@@ -7,7 +7,7 @@ on:
         description: 'User Name'
         required: true
 
-# Isolates sessions: Kills ONLY the old VPS belonging to this specific user
+# This automatically kills the user's old VPS when they deploy a new one
 concurrency:
   group: vps-${{ github.event.inputs.username }}
   cancel-in-progress: true
@@ -25,9 +25,8 @@ jobs:
     - name: Checkout Private Storage Repo (Repo 2)
       uses: actions/checkout@v4
       with:
-        # IMPORTANT: Replace with your actual Private Repo 2 name (e.g., AADI-playz23/vps-storage)
-        repository: AADI-playz23/vps-disk
-        token: ${{ secrets.STORAGE_PATH }}
+        repository: YOUR_GITHUB_USERNAME/vps-storage # UPDATE THIS!
+        token: ${{ secrets.STORAGE_PAT }}
         path: storage_repo
         ref: main 
 
@@ -51,14 +50,21 @@ jobs:
         
         cd ../compute_repo
         
-        # THE FIX: Absolute hardcoded path to prevent Temp Storage mapping!
         STORAGE_PATH="${{ github.workspace }}/storage_repo" nohup node server.js > server.log 2>&1 &
         echo "Node.js compute core booted."
         
-        # Start localhost.run SSH Tunnel
-        ssh -R 80:localhost:8765 nokey@localhost.run -o StrictHostKeyChecking=no -T > tunnel.log 2>&1 &
+        # Start tunnel
+        ssh -R 80:127.0.0.1:8765 nokey@localhost.run -o StrictHostKeyChecking=no -T > tunnel.log 2>&1 &
         echo "Waiting for tunnel initialization..."
-        sleep 15
+        
+        # THE FIX: Dynamic waiting. Checks every 2 seconds for up to 60 seconds.
+        for i in {1..30}; do
+          if grep -q "lhr.life" tunnel.log; then
+            echo "Tunnel URL found!"
+            break
+          fi
+          sleep 2
+        done
 
     - name: Push Session and Workspace to Private Repo
       run: |
@@ -66,19 +72,17 @@ jobs:
         TUNNEL_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.lhr\.life' tunnel.log | head -n 1)
         
         if [ -z "$TUNNEL_URL" ]; then
-          echo "Error: Tunnel URL generation failed. See log:"
+          echo "Error: Tunnel URL generation failed. Here is the log:"
           cat tunnel.log
           exit 1
         fi
         
         echo "Successfully generated NEW Tunnel URL: $TUNNEL_URL"
         
-        # Move into Private Repo to save the data securely
         cd ../storage_repo
-        git pull origin main
+        git pull origin main || true
 
-        # Force delete the old session file to guarantee Git sees the change
-        rm -f "session/${{ github.event.inputs.username }}.txt"
+        rm -f "session/${{ github.event.inputs.username }}.txt" || true
 
         mkdir -p session
         echo "$TUNNEL_URL" > "session/${{ github.event.inputs.username }}.txt"
@@ -88,11 +92,9 @@ jobs:
           echo "Welcome to BUGVPS! Your secure, private storage is ready." > "users/${{ github.event.inputs.username }}/welcome.txt"
         fi
 
-        git add session/ "users/${{ github.event.inputs.username }}/"
-        git commit -m "Update session for ${{ github.event.inputs.username }}" || echo "No changes to commit"
-        
-        # Aggressive push ensuring the exact current state is uploaded
-        git push origin HEAD:main
+        git add session/ "users/${{ github.event.inputs.username }}/" || true
+        git commit -m "Update session for ${{ github.event.inputs.username }}" || true
+        git push origin HEAD:main || echo "[WARNING] Push failed, but keeping runner alive."
 
     - name: Keep Compute Runner Alive
       run: |
