@@ -30,7 +30,6 @@ function toReal(virtualPath) {
     return realPath;
 }
 
-// THE FIX: Explicitly bind to IPv4 (0.0.0.0) so the SSH tunnel can find it
 const wss = new WebSocket.Server({ host: '0.0.0.0', port: PORT });
 console.log(`Compute Node Active. Storage mounted at ${BASE_DIR}`);
 
@@ -70,6 +69,22 @@ wss.on('connection', (ws) => {
             const msgType = data.type || "shell";
 
             if (msgType === "ping") return;
+
+            // THE FIX: Self-Destruct Sequence
+            if (msgType === "kill") {
+                ws.send(JSON.stringify({ type: "shell", data: "\n[SYSTEM] Terminate signal received. Syncing final data...\n" }));
+                
+                try {
+                    // Final forceful sync before death
+                    execSync(`git add "users/${USERNAME}" && git commit -m "Final sync before shutdown" && git push origin HEAD:main`, { cwd: BASE_DIR, stdio: 'ignore' });
+                } catch(e) {}
+                
+                ws.send(JSON.stringify({ type: "shell", data: "[SYSTEM] Hardware shutting down. Goodbye.\n" }));
+                
+                // Kill the Node process. This breaks the while loop in bugvps.yml and ends the runner!
+                setTimeout(() => { process.exit(0); }, 1000);
+                return;
+            }
 
             if (msgType === "fm") {
                 const action = data.action;
