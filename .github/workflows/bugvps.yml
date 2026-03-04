@@ -25,8 +25,8 @@ jobs:
     - name: Checkout Private Storage Repo (Repo 2)
       uses: actions/checkout@v4
       with:
-        repository: YOUR_GITHUB_USERNAME/vps-storage # UPDATE THIS!
-        token: ${{ secrets.STORAGE_PAT }}
+        repository: AADI-playz23/vps-disk # UPDATE THIS!
+        token: ${{ secrets.STORAGE_PATH }}
         path: storage_repo
         ref: main 
 
