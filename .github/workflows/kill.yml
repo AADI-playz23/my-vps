@@ -1,0 +1,24 @@
+name: Kill VPS Node
+
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: 'User Name'
+        required: true
+
+# THE MAGIC: This exact group name forces GitHub to kill the running VPS
+concurrency:
+  group: vps-${{ github.event.inputs.username }}
+  cancel-in-progress: true
+
+jobs:
+  terminate:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Execute Hard Kill
+      run: |
+        echo "Kill signal received for user: ${{ github.event.inputs.username }}"
+        echo "The active bugvps.yml runner has been intercepted and terminated."
+        echo "Shutdown complete."
