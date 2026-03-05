@@ -5,6 +5,7 @@ const path = require('path');
 
 const PORT = 8765;
 
+// Absolute path targeting ensures files NEVER end up in runner temp storage
 const BASE_DIR = process.env.STORAGE_PATH ? path.resolve(process.env.STORAGE_PATH) : process.cwd();
 const USERNAME = process.env.VPS_USER || "guest";
 const WORKSPACE_DIR = path.resolve(BASE_DIR, "users", USERNAME);
@@ -13,6 +14,7 @@ if (!fs.existsSync(WORKSPACE_DIR)) {
     fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 }
 
+// Ensure Git is configured for the background daemon
 try {
     execSync(`git config user.name "BUGVPS Auto-Daemon"`, { cwd: BASE_DIR });
     execSync(`git config user.email "system@bugvps.local"`, { cwd: BASE_DIR });
@@ -30,9 +32,11 @@ function toReal(virtualPath) {
     return realPath;
 }
 
+// THE FIX: Explicitly bind to IPv4 (0.0.0.0) so the SSH tunnel can find it
 const wss = new WebSocket.Server({ host: '0.0.0.0', port: PORT });
 console.log(`Compute Node Active. Storage mounted at ${BASE_DIR}`);
 
+// --- 3-SECOND REAL-TIME AUTO-SYNC DAEMON ---
 let isSyncing = false;
 
 setInterval(() => {
@@ -70,22 +74,6 @@ wss.on('connection', (ws) => {
 
             if (msgType === "ping") return;
 
-            // THE FIX: Self-Destruct Sequence
-            if (msgType === "kill") {
-                ws.send(JSON.stringify({ type: "shell", data: "\n[SYSTEM] Terminate signal received. Syncing final data...\n" }));
-                
-                try {
-                    // Final forceful sync before death
-                    execSync(`git add "users/${USERNAME}" && git commit -m "Final sync before shutdown" && git push origin HEAD:main`, { cwd: BASE_DIR, stdio: 'ignore' });
-                } catch(e) {}
-                
-                ws.send(JSON.stringify({ type: "shell", data: "[SYSTEM] Hardware shutting down. Goodbye.\n" }));
-                
-                // Kill the Node process. This breaks the while loop in bugvps.yml and ends the runner!
-                setTimeout(() => { process.exit(0); }, 1000);
-                return;
-            }
-
             if (msgType === "fm") {
                 const action = data.action;
                 const absPath = toReal(data.path || "/");
@@ -109,6 +97,13 @@ wss.on('connection', (ws) => {
                         }
                     } else if (action === "write") {
                         fs.writeFileSync(absPath, data.content || '', 'utf8');
+                        
+                    // --- THE NEW UPLOAD HANDLER ---
+                    } else if (action === "upload") {
+                        // Decode the Base64 data received from the frontend
+                        const buffer = Buffer.from(data.content || '', 'base64');
+                        fs.writeFileSync(absPath, buffer);
+                        
                     } else if (action === "create_file") {
                         if (!fs.existsSync(absPath)) fs.writeFileSync(absPath, '', 'utf8');
                     } else if (action === "create_dir") {
@@ -144,6 +139,7 @@ wss.on('connection', (ws) => {
                 return;
             }
 
+            // Standard Terminal Execution
             exec(cmd, { cwd: currentDir }, (error, stdout, stderr) => {
                 if (stdout) ws.send(JSON.stringify({ type: "shell", data: stdout }));
                 if (stderr) ws.send(JSON.stringify({ type: "shell", data: stderr }));
