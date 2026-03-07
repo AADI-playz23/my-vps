@@ -1,4 +1,4 @@
-name: BUGVPS Compute Node
+name: Absora Compute Node
 
 on:
   workflow_dispatch:
@@ -6,8 +6,11 @@ on:
       username:
         description: 'User Name'
         required: true
+      plan:
+        description: 'Account Tier (free or pro)'
+        required: true
+        default: 'free'
 
-# This automatically kills the user's old VPS when they deploy a new one
 concurrency:
   group: vps-${{ github.event.inputs.username }}
   cancel-in-progress: true
@@ -25,8 +28,8 @@ jobs:
     - name: Checkout Private Storage Repo (Repo 2)
       uses: actions/checkout@v4
       with:
-        repository: AADI-playz23/vps-disk # UPDATE THIS!
-        token: ${{ secrets.STORAGE_PATH }}
+        repository: YOUR_GITHUB_USERNAME/vps-storage # UPDATE THIS!
+        token: ${{ secrets.STORAGE_PAT }}
         path: storage_repo
         ref: main 
 
@@ -43,63 +46,60 @@ jobs:
     - name: Start Node Server & Tunnel
       env:
         VPS_USER: ${{ github.event.inputs.username }}
+        VPS_PLAN: ${{ github.event.inputs.plan }}
       run: |
         cd storage_repo
-        git config user.name "BUGVPS Auto-System"
-        git config user.email "system@bugvps.local"
+        git config user.name "Absora Auto-System"
+        git config user.email "system@absora.local"
         
         cd ../compute_repo
         
-        STORAGE_PATH="${{ github.workspace }}/storage_repo" nohup node server.js > server.log 2>&1 &
-        echo "Node.js compute core booted."
+        # TIER ENFORCEMENT LOGIC
+        if [ "${{ github.event.inputs.plan }}" == "pro" ]; then
+          echo "Booting PRO Persistent Vault..."
+          STORAGE_PATH="${{ github.workspace }}/storage_repo" nohup node server.js > server.log 2>&1 &
+        else
+          echo "Booting FREE Ephemeral Vault..."
+          mkdir -p "${{ github.workspace }}/temp_vault"
+          STORAGE_PATH="${{ github.workspace }}/temp_vault" nohup node server.js > server.log 2>&1 &
+        fi
         
-        # Start tunnel
         ssh -R 80:127.0.0.1:8765 nokey@localhost.run -o StrictHostKeyChecking=no -T > tunnel.log 2>&1 &
-        echo "Waiting for tunnel initialization..."
         
-        # THE FIX: Dynamic waiting. Checks every 2 seconds for up to 60 seconds.
         for i in {1..30}; do
-          if grep -q "lhr.life" tunnel.log; then
-            echo "Tunnel URL found!"
-            break
-          fi
+          if grep -q "lhr.life" tunnel.log; then break; fi
           sleep 2
         done
 
-    - name: Push Session and Workspace to Private Repo
+    - name: Push Session to Private Repo
       run: |
         cd compute_repo
         TUNNEL_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.lhr\.life' tunnel.log | head -n 1)
         
-        if [ -z "$TUNNEL_URL" ]; then
-          echo "Error: Tunnel URL generation failed. Here is the log:"
-          cat tunnel.log
-          exit 1
-        fi
-        
-        echo "Successfully generated NEW Tunnel URL: $TUNNEL_URL"
+        if [ -z "$TUNNEL_URL" ]; then exit 1; fi
         
         cd ../storage_repo
         git pull origin main || true
 
         rm -f "session/${{ github.event.inputs.username }}.txt" || true
-
         mkdir -p session
         echo "$TUNNEL_URL" > "session/${{ github.event.inputs.username }}.txt"
 
-        mkdir -p "users/${{ github.event.inputs.username }}"
-        if [ ! -f "users/${{ github.event.inputs.username }}/welcome.txt" ]; then
-          echo "Welcome to BUGVPS! Your secure, private storage is ready." > "users/${{ github.event.inputs.username }}/welcome.txt"
+        # ALWAYS save the tunnel link so the dashboard connects
+        git add session/ || true
+
+        # ONLY save the user files if they are PRO
+        if [ "${{ github.event.inputs.plan }}" == "pro" ]; then
+          mkdir -p "users/${{ github.event.inputs.username }}"
+          if [ ! -f "users/${{ github.event.inputs.username }}/welcome.txt" ]; then
+            echo "Welcome to Absora PRO! Your storage is persistent." > "users/${{ github.event.inputs.username }}/welcome.txt"
+          fi
+          git add "users/${{ github.event.inputs.username }}/" || true
         fi
 
-        git add session/ "users/${{ github.event.inputs.username }}/" || true
         git commit -m "Update session for ${{ github.event.inputs.username }}" || true
         git push origin HEAD:main || echo "[WARNING] Push failed, but keeping runner alive."
 
     - name: Keep Compute Runner Alive
       run: |
-        echo "Compute node is live! Waiting for frontend handshake..."
-        while pgrep -f "node server.js" > /dev/null; do
-          sleep 5
-        done
-        echo "Session terminated."
+        while pgrep -f "node server.js" > /dev/null; do sleep 5; done
