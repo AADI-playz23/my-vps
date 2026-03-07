@@ -5,20 +5,22 @@ const path = require('path');
 
 const PORT = 8765;
 
-// Absolute path targeting ensures files NEVER end up in runner temp storage
 const BASE_DIR = process.env.STORAGE_PATH ? path.resolve(process.env.STORAGE_PATH) : process.cwd();
 const USERNAME = process.env.VPS_USER || "guest";
+const PLAN = process.env.VPS_PLAN || "free"; // Import the plan from the YAML file
 const WORKSPACE_DIR = path.resolve(BASE_DIR, "users", USERNAME);
 
 if (!fs.existsSync(WORKSPACE_DIR)) {
     fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 }
 
-// Ensure Git is configured for the background daemon
-try {
-    execSync(`git config user.name "BUGVPS Auto-Daemon"`, { cwd: BASE_DIR });
-    execSync(`git config user.email "system@bugvps.local"`, { cwd: BASE_DIR });
-} catch(e) {}
+// Only configure Git if they are PRO
+if (PLAN === "pro") {
+    try {
+        execSync(`git config user.name "Absora Auto-Daemon"`, { cwd: BASE_DIR });
+        execSync(`git config user.email "system@absora.local"`, { cwd: BASE_DIR });
+    } catch(e) {}
+}
 
 function toVirtual(realPath) {
     let rel = path.relative(WORKSPACE_DIR, realPath).replace(/\\/g, '/');
@@ -32,14 +34,16 @@ function toReal(virtualPath) {
     return realPath;
 }
 
-// THE FIX: Explicitly bind to IPv4 (0.0.0.0) so the SSH tunnel can find it
 const wss = new WebSocket.Server({ host: '0.0.0.0', port: PORT });
-console.log(`Compute Node Active. Storage mounted at ${BASE_DIR}`);
+console.log(`Compute Node Active. Mode: ${PLAN.toUpperCase()}. Storage mounted at ${BASE_DIR}`);
 
 // --- 3-SECOND REAL-TIME AUTO-SYNC DAEMON ---
 let isSyncing = false;
 
 setInterval(() => {
+    // THE FIX: Immediately kill the daemon if the user is on the free tier
+    if (PLAN !== "pro") return;
+    
     if (isSyncing) return; 
     
     try {
@@ -65,7 +69,13 @@ setInterval(() => {
 
 wss.on('connection', (ws) => {
     let currentDir = WORKSPACE_DIR;
-    ws.send(JSON.stringify({ type: "shell", data: "BUGVPS OS Initialized...\n[PRIVATE VAULT SECURED]\n[3-SEC AUTO-SYNC DAEMON ACTIVE]\nWorkspace mounted at /\n\n" }));
+    
+    // Dynamic Welcome Message based on Tier
+    const welcomeMsg = PLAN === "pro" 
+        ? "Absora OS Initialized...\n[PRO TIER ACTIVE]\n[PRIVATE VAULT SECURED]\n[3-SEC AUTO-SYNC DAEMON ONLINE]\nWorkspace mounted at /\n\n"
+        : "Absora OS Initialized...\n[FREE TIER ACTIVE]\n[WARNING: EPHEMERAL STORAGE. FILES WILL BE WIPED ON EXIT]\nWorkspace mounted at /\n\n";
+
+    ws.send(JSON.stringify({ type: "shell", data: welcomeMsg }));
 
     ws.on('message', (message) => {
         try {
@@ -73,6 +83,23 @@ wss.on('connection', (ws) => {
             const msgType = data.type || "shell";
 
             if (msgType === "ping") return;
+
+            if (msgType === "kill") {
+                ws.send(JSON.stringify({ type: "shell", data: "\n[SYSTEM] Terminate signal received...\n" }));
+                
+                if (PLAN === "pro") {
+                    ws.send(JSON.stringify({ type: "shell", data: "[SYSTEM] Syncing final data to Persistent Vault...\n" }));
+                    try {
+                        execSync(`git add "users/${USERNAME}" && git commit -m "Final sync before shutdown" && git push origin HEAD:main`, { cwd: BASE_DIR, stdio: 'ignore' });
+                    } catch(e) {}
+                } else {
+                    ws.send(JSON.stringify({ type: "shell", data: "[SYSTEM] Destroying Free Tier Ephemeral Storage...\n" }));
+                }
+                
+                ws.send(JSON.stringify({ type: "shell", data: "[SYSTEM] Hardware shutting down. Goodbye.\n" }));
+                setTimeout(() => { process.exit(0); }, 1000);
+                return;
+            }
 
             if (msgType === "fm") {
                 const action = data.action;
@@ -97,13 +124,9 @@ wss.on('connection', (ws) => {
                         }
                     } else if (action === "write") {
                         fs.writeFileSync(absPath, data.content || '', 'utf8');
-                        
-                    // --- THE NEW UPLOAD HANDLER ---
                     } else if (action === "upload") {
-                        // Decode the Base64 data received from the frontend
                         const buffer = Buffer.from(data.content || '', 'base64');
                         fs.writeFileSync(absPath, buffer);
-                        
                     } else if (action === "create_file") {
                         if (!fs.existsSync(absPath)) fs.writeFileSync(absPath, '', 'utf8');
                     } else if (action === "create_dir") {
@@ -139,7 +162,6 @@ wss.on('connection', (ws) => {
                 return;
             }
 
-            // Standard Terminal Execution
             exec(cmd, { cwd: currentDir }, (error, stdout, stderr) => {
                 if (stdout) ws.send(JSON.stringify({ type: "shell", data: stdout }));
                 if (stderr) ws.send(JSON.stringify({ type: "shell", data: stderr }));
