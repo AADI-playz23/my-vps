@@ -10,40 +10,25 @@ jobs:
     steps:
       - name: Checkout Compute Repo
         uses: actions/checkout@v4
-        
-      - name: Gatekeeper API & Identity Check
-        id: gatekeeper
-        run: |
-          CONFIG=$(curl -k -s -L -X POST https://abvps.rf.gd/api.php \
-            -H "X-ABSORA-KEY: absora_master_key_2026" \
-            -d "action=get_config" \
-            -d "username=${{ github.event.client_payload.username }}")
-          
-          if [ "$(echo $CONFIG | jq -r '.status')" == "banned" ]; then 
-            echo "ACCESS DENIED: Account Banned."
-            exit 1
-          fi
-          
-          echo "PLAN=$(echo $CONFIG | jq -r '.plan')" >> $GITHUB_ENV
-          echo "VAULT=$(echo $CONFIG | jq -r '.vault')" >> $GITHUB_ENV
-          echo "TOKEN=$(echo $CONFIG | jq -r '.token')" >> $GITHUB_ENV
 
       - name: Provision Infrastructure & Storage
         env:
           VPS_USER: ${{ github.event.client_payload.username }}
           CLOUD: ${{ github.event.client_payload.cloud }}
           TOKEN: ${{ github.event.client_payload.token }}
+          PLAN: ${{ github.event.client_payload.plan }}
+          VAULT: ${{ github.event.client_payload.vault }}
           STORAGE_PAT: ${{ secrets.STORAGE_PAT }}
         run: |
           mkdir -p $GITHUB_WORKSPACE/vault
           
-          # Sync from specific vault repo
+          # Base Git Vault Sync
           if [ "$PLAN" != "free" ]; then
              git clone https://x-access-token:${STORAGE_PAT}@github.com/AADI-playz23/${VAULT}.git vault_data
              cp -r vault_data/${VPS_USER}/* $GITHUB_WORKSPACE/vault/ || true
           fi
           
-          # Rclone BYOS Mount
+          # External Cloud Mounting (BYOS)
           if [[ "$CLOUD" != "none" && "$TOKEN" != "" ]]; then
               sudo apt-get install -y rclone fuse
               mkdir -p ~/.config/rclone/
@@ -64,7 +49,10 @@ jobs:
         env:
           VPS_USER: ${{ github.event.client_payload.username }}
           OS_CHOICE: ${{ github.event.client_payload.os }}
+          PLAN: ${{ github.event.client_payload.plan }}
         run: |
+          # Pass PLAN to Node.js environment
+          export PLAN="$PLAN"
           STORAGE_PATH="$GITHUB_WORKSPACE/vault" nohup node server.js > server.log 2>&1 &
           
           ssh -R 80:127.0.0.1:8765 nokey@localhost.run -o StrictHostKeyChecking=no -T > tunnel.log 2>&1 &
