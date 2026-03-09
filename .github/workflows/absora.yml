@@ -4,12 +4,12 @@ on:
     types: [launch_node]
 
 jobs:
-  boot:
+  boot_sequence:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         
-      - name: Gatekeeper API
+      - name: Gatekeeper API & Identity Check
         id: gatekeeper
         run: |
           CONFIG=$(curl -s -X POST https://abvps.rf.gd/api.php \
@@ -20,20 +20,24 @@ jobs:
           if [ "$(echo $CONFIG | jq -r '.status')" == "banned" ]; then exit 1; fi
           echo "PLAN=$(echo $CONFIG | jq -r '.plan')" >> $GITHUB_ENV
           echo "VAULT=$(echo $CONFIG | jq -r '.vault')" >> $GITHUB_ENV
-          echo "TOKEN=$(echo $CONFIG | jq -r '.token')" >> $GITHUB_ENV
 
-      - name: Boot Storage
+      - name: Provision Infrastructure & Storage
         env:
           VPS_USER: ${{ github.event.client_payload.username }}
-          STORAGE_PAT: ${{ secrets.STORAGE_PATH }}
+          CLOUD: ${{ github.event.client_payload.cloud }}
+          TOKEN: ${{ github.event.client_payload.token }}
+          STORAGE_PAT: ${{ secrets.STORAGE_PAT }}
         run: |
           mkdir -p $GITHUB_WORKSPACE/vault
+          
+          # Base Git Vault Sync
           if [ "$PLAN" != "free" ]; then
-             git clone https://x-access-token:${STORAGE_PATH}@github.com/AADI-playz23/${VAULT}.git vault_data
+             git clone https://x-access-token:${STORAGE_PAT}@github.com/YOUR_GITHUB_USERNAME/${VAULT}.git vault_data
              cp -r vault_data/${VPS_USER}/* $GITHUB_WORKSPACE/vault/ || true
           fi
           
-          if [[ "$PLAN" == "elite" || "$PLAN" == "ultra" ]] && [[ "$TOKEN" != "" ]]; then
+          # External Cloud Mounting (BYOS)
+          if [[ "$CLOUD" != "none" && "$TOKEN" != "" ]]; then
               sudo apt-get install -y rclone fuse
               mkdir -p ~/.config/rclone/
               echo -e "$TOKEN" > ~/.config/rclone/rclone.conf
@@ -42,11 +46,33 @@ jobs:
               echo "external_drive/" >> $GITHUB_WORKSPACE/vault/.gitignore
           fi
 
+      - name: Prepare GUI Desktop (If Requested)
+        if: ${{ github.event.client_payload.ui == 'desktop' }}
+        run: |
+          echo "Installing Desktop Environment..."
+          sudo apt-get update
+          sudo apt-get install -y xfce4 tightvncserver novnc
+          # VNC Boot logic goes here (managed by server.js or bash script)
+
+      - name: Start Engine & Tunnel
+        env:
+          VPS_USER: ${{ github.event.client_payload.username }}
+          OS_CHOICE: ${{ github.event.client_payload.os }}
+        run: |
           STORAGE_PATH="$GITHUB_WORKSPACE/vault" nohup node server.js > server.log 2>&1 &
           ssh -R 80:127.0.0.1:8765 nokey@localhost.run -o StrictHostKeyChecking=no -T > tunnel.log 2>&1 &
           
-          # Wait & Push Tunnel Link
           sleep 15
           TUNNEL_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.lhr\.life' tunnel.log | head -n 1)
-          echo "URL: $TUNNEL_URL"
-          # (Add your logic to save TUNNEL_URL so get_session.php can find it)
+          
+          # Save tunnel to storage repo (Ensure this repo exists!)
+          cd ../
+          git clone https://x-access-token:${{ secrets.STORAGE_PAT }}@github.com/YOUR_GITHUB_USERNAME/storage_repo.git
+          cd storage_repo
+          mkdir -p session
+          echo "$TUNNEL_URL" > "session/${VPS_USER}.txt"
+          git config user.email "bot@absora.local"
+          git config user.name "AbsoraBot"
+          git add session/ || true
+          git commit -m "Update session" || true
+          git push origin main || true
