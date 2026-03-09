@@ -24,7 +24,7 @@ jobs:
           
           # Base Git Vault Sync
           if [ "$PLAN" != "free" ]; then
-             git clone https://x-access-token:${STORAGE_PAT}@github.com/AADI-playz23/${VAULT}.git vault_data
+             git clone https://x-access-token:${STORAGE_PATH}@github.com/AADI-playz23/${VAULT}.git vault_data
              cp -r vault_data/${VPS_USER}/* $GITHUB_WORKSPACE/vault/ || true
           fi
           
