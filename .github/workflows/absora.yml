@@ -1,4 +1,5 @@
 name: Absora Compute Core
+
 on:
   repository_dispatch:
     types: [launch_node]
@@ -7,7 +8,8 @@ jobs:
   boot_sequence:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Compute Repo
+        uses: actions/checkout@v4
         
       - name: Gatekeeper API & Identity Check
         id: gatekeeper
@@ -17,7 +19,11 @@ jobs:
             -d "action=get_config" \
             -d "username=${{ github.event.client_payload.username }}")
           
-          if [ "$(echo $CONFIG | jq -r '.status')" == "banned" ]; then exit 1; fi
+          if [ "$(echo $CONFIG | jq -r '.status')" == "banned" ]; then 
+            echo "ACCESS DENIED: Account Banned."
+            exit 1
+          fi
+          
           echo "PLAN=$(echo $CONFIG | jq -r '.plan')" >> $GITHUB_ENV
           echo "VAULT=$(echo $CONFIG | jq -r '.vault')" >> $GITHUB_ENV
 
@@ -30,9 +36,9 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/vault
           
-          # Base Git Vault Sync
+          # Base Git Vault Sync (Skips if Free tier)
           if [ "$PLAN" != "free" ]; then
-             git clone https://x-access-token:${STORAGE_PAT}@github.com/YOUR_GITHUB_USERNAME/${VAULT}.git vault_data
+             git clone https://x-access-token:${STORAGE_PAT}@github.com/AADI-playz23/${VAULT}.git vault_data
              cp -r vault_data/${VPS_USER}/* $GITHUB_WORKSPACE/vault/ || true
           fi
           
@@ -52,23 +58,25 @@ jobs:
           echo "Installing Desktop Environment..."
           sudo apt-get update
           sudo apt-get install -y xfce4 tightvncserver novnc
-          # VNC Boot logic goes here (managed by server.js or bash script)
 
       - name: Start Engine & Tunnel
         env:
           VPS_USER: ${{ github.event.client_payload.username }}
           OS_CHOICE: ${{ github.event.client_payload.os }}
         run: |
+          # Start Node Server
           STORAGE_PATH="$GITHUB_WORKSPACE/vault" nohup node server.js > server.log 2>&1 &
+          
+          # Start Web Tunnel
           ssh -R 80:127.0.0.1:8765 nokey@localhost.run -o StrictHostKeyChecking=no -T > tunnel.log 2>&1 &
           
           sleep 15
           TUNNEL_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.lhr\.life' tunnel.log | head -n 1)
           
-          # Save tunnel to storage repo (Ensure this repo exists!)
+          # Save tunnel URL so Dashboard can find it
           cd ../
-          git clone https://x-access-token:${{ secrets.STORAGE_PAT }}@github.com/YOUR_GITHUB_USERNAME/storage_repo.git
-          cd storage_repo
+          git clone https://x-access-token:${{ secrets.STORAGE_PAT }}@github.com/AADI-playz23/my-vps.git storage_update
+          cd storage_update
           mkdir -p session
           echo "$TUNNEL_URL" > "session/${VPS_USER}.txt"
           git config user.email "bot@absora.local"
