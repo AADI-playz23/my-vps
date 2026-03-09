@@ -14,7 +14,7 @@ jobs:
       - name: Gatekeeper API & Identity Check
         id: gatekeeper
         run: |
-          CONFIG=$(curl -s -X POST https://abvps.rf.gd/api.php \
+          CONFIG=$(curl -k -s -L -X POST https://abvps.rf.gd/api.php \
             -H "X-ABSORA-KEY: absora_master_key_2026" \
             -d "action=get_config" \
             -d "username=${{ github.event.client_payload.username }}")
@@ -26,6 +26,7 @@ jobs:
           
           echo "PLAN=$(echo $CONFIG | jq -r '.plan')" >> $GITHUB_ENV
           echo "VAULT=$(echo $CONFIG | jq -r '.vault')" >> $GITHUB_ENV
+          echo "TOKEN=$(echo $CONFIG | jq -r '.token')" >> $GITHUB_ENV
 
       - name: Provision Infrastructure & Storage
         env:
@@ -36,13 +37,13 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/vault
           
-          # Base Git Vault Sync (Skips if Free tier)
+          # Sync from specific vault repo
           if [ "$PLAN" != "free" ]; then
              git clone https://x-access-token:${STORAGE_PAT}@github.com/AADI-playz23/${VAULT}.git vault_data
              cp -r vault_data/${VPS_USER}/* $GITHUB_WORKSPACE/vault/ || true
           fi
           
-          # External Cloud Mounting (BYOS)
+          # Rclone BYOS Mount
           if [[ "$CLOUD" != "none" && "$TOKEN" != "" ]]; then
               sudo apt-get install -y rclone fuse
               mkdir -p ~/.config/rclone/
@@ -64,16 +65,14 @@ jobs:
           VPS_USER: ${{ github.event.client_payload.username }}
           OS_CHOICE: ${{ github.event.client_payload.os }}
         run: |
-          # Start Node Server
           STORAGE_PATH="$GITHUB_WORKSPACE/vault" nohup node server.js > server.log 2>&1 &
           
-          # Start Web Tunnel
           ssh -R 80:127.0.0.1:8765 nokey@localhost.run -o StrictHostKeyChecking=no -T > tunnel.log 2>&1 &
           
           sleep 15
           TUNNEL_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.lhr\.life' tunnel.log | head -n 1)
           
-          # Save tunnel URL so Dashboard can find it
+          # Save tunnel to storage so the frontend can find it
           cd ../
           git clone https://x-access-token:${{ secrets.STORAGE_PAT }}@github.com/AADI-playz23/my-vps.git storage_update
           cd storage_update
