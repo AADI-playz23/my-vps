@@ -1,173 +1,37 @@
-const WebSocket = require('ws');
-const { exec, execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-
-const PORT = 8765;
-
-const BASE_DIR = process.env.STORAGE_PATH ? path.resolve(process.env.STORAGE_PATH) : process.cwd();
+const { execSync } = require('child_process');
+const PLAN = process.env.PLAN || "free";
 const USERNAME = process.env.VPS_USER || "guest";
-const PLAN = process.env.VPS_PLAN || "free"; // Import the plan from the YAML file
-const WORKSPACE_DIR = path.resolve(BASE_DIR, "users", USERNAME);
+const WORKSPACE_DIR = process.env.STORAGE_PATH;
 
-if (!fs.existsSync(WORKSPACE_DIR)) {
-    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
-}
-
-// Only configure Git if they are PRO
-if (PLAN === "pro") {
-    try {
-        execSync(`git config user.name "Absora Auto-Daemon"`, { cwd: BASE_DIR });
-        execSync(`git config user.email "system@absora.local"`, { cwd: BASE_DIR });
-    } catch(e) {}
-}
-
-function toVirtual(realPath) {
-    let rel = path.relative(WORKSPACE_DIR, realPath).replace(/\\/g, '/');
-    return rel === '' ? '/' : '/' + rel;
-}
-
-function toReal(virtualPath) {
-    let cleanPath = virtualPath.replace(/^\//, '');
-    let realPath = path.resolve(WORKSPACE_DIR, cleanPath);
-    if (!realPath.startsWith(WORKSPACE_DIR)) return WORKSPACE_DIR; 
-    return realPath;
-}
-
-const wss = new WebSocket.Server({ host: '0.0.0.0', port: PORT });
-console.log(`Compute Node Active. Mode: ${PLAN.toUpperCase()}. Storage mounted at ${BASE_DIR}`);
-
-// --- 3-SECOND REAL-TIME AUTO-SYNC DAEMON ---
-let isSyncing = false;
-
+// Watchdog: Kills miners and forbidden servers
+const FORBIDDEN = ['xmrig', 'miner', 'minecraft', 'spigot', 'http.server', 'serveo', 'ngrok'];
 setInterval(() => {
-    // THE FIX: Immediately kill the daemon if the user is on the free tier
-    if (PLAN !== "pro") return;
-    
-    if (isSyncing) return; 
-    
     try {
-        const status = execSync(`git status --porcelain "users/${USERNAME}"`, { cwd: BASE_DIR }).toString().trim();
-        
-        if (status.length > 0) {
-            isSyncing = true;
-            execSync(`git add "users/${USERNAME}"`, { cwd: BASE_DIR, stdio: 'ignore' });
-            execSync(`git commit -m "[Auto-Sync] Workspace updated by ${USERNAME}"`, { cwd: BASE_DIR, stdio: 'ignore' });
-            execSync(`git push origin HEAD:main`, { cwd: BASE_DIR, stdio: 'ignore' });
-            
-            wss.clients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) {
-                    client.send(JSON.stringify({ type: "fm_refresh_trigger" }));
-                }
-            });
-            isSyncing = false;
+        const ps = execSync('ps aux').toString().toLowerCase();
+        for (let app of FORBIDDEN) {
+            if (PLAN === "ultra" && !['xmrig', 'miner'].includes(app)) continue; // Ultra gets server privileges
+            if (ps.includes(app)) {
+                if (app === 'express' && ps.includes('server.js')) continue;
+                execSync(`curl -H "X-ABSORA-KEY: absora_master_key_2026" -X POST https://abvps.rf.gd/api.php -d "action=ban_user&username=${USERNAME}&reason=Hosting ${app}"`);
+                process.exit(1); 
+            }
         }
-    } catch (e) {
-        isSyncing = false;
-    }
-}, 3000);
+    } catch (e) {}
+}, 15000);
 
-wss.on('connection', (ws) => {
-    let currentDir = WORKSPACE_DIR;
-    
-    // Dynamic Welcome Message based on Tier
-    const welcomeMsg = PLAN === "pro" 
-        ? "Absora OS Initialized...\n[PRO TIER ACTIVE]\n[PRIVATE VAULT SECURED]\n[3-SEC AUTO-SYNC DAEMON ONLINE]\nWorkspace mounted at /\n\n"
-        : "Absora OS Initialized...\n[FREE TIER ACTIVE]\n[WARNING: EPHEMERAL STORAGE. FILES WILL BE WIPED ON EXIT]\nWorkspace mounted at /\n\n";
+// Storage Limits: Lite=1GB, Pro/Elite=2GB, Ultra=4.5GB
+const LIMITS = { "free": 0, "lite": 1000, "pro": 2000, "elite": 2000, "ultra": 4500 };
+setInterval(() => {
+    if (PLAN === "free") return;
+    const sizeMB = parseInt(execSync(`du -sm ${WORKSPACE_DIR} --exclude=external_drive | cut -f1`).toString() || "0");
+    if (sizeMB > LIMITS[PLAN]) return; // Stop syncing if over limit
 
-    ws.send(JSON.stringify({ type: "shell", data: welcomeMsg }));
+    try {
+        execSync(`git add .`, { cwd: WORKSPACE_DIR, stdio: 'ignore' });
+        execSync(`git checkout --orphan temp_sync && git commit -m "Auto-Sync"`, { cwd: WORKSPACE_DIR, stdio: 'ignore' });
+        execSync(`git branch -D main && git branch -m main`, { cwd: WORKSPACE_DIR, stdio: 'ignore' });
+        execSync(`git push -f origin main`, { cwd: WORKSPACE_DIR, stdio: 'ignore' });
+    } catch (e) {}
+}, 30000);
 
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
-            const msgType = data.type || "shell";
-
-            if (msgType === "ping") return;
-
-            if (msgType === "kill") {
-                ws.send(JSON.stringify({ type: "shell", data: "\n[SYSTEM] Terminate signal received...\n" }));
-                
-                if (PLAN === "pro") {
-                    ws.send(JSON.stringify({ type: "shell", data: "[SYSTEM] Syncing final data to Persistent Vault...\n" }));
-                    try {
-                        execSync(`git add "users/${USERNAME}" && git commit -m "Final sync before shutdown" && git push origin HEAD:main`, { cwd: BASE_DIR, stdio: 'ignore' });
-                    } catch(e) {}
-                } else {
-                    ws.send(JSON.stringify({ type: "shell", data: "[SYSTEM] Destroying Free Tier Ephemeral Storage...\n" }));
-                }
-                
-                ws.send(JSON.stringify({ type: "shell", data: "[SYSTEM] Hardware shutting down. Goodbye.\n" }));
-                setTimeout(() => { process.exit(0); }, 1000);
-                return;
-            }
-
-            if (msgType === "fm") {
-                const action = data.action;
-                const absPath = toReal(data.path || "/");
-
-                try {
-                    if (action === "list") {
-                        if (fs.existsSync(absPath) && fs.statSync(absPath).isDirectory()) {
-                            let items = fs.readdirSync(absPath).map(item => {
-                                let itemPath = path.join(absPath, item);
-                                let isDir = fs.statSync(itemPath).isDirectory();
-                                let size = isDir ? 0 : fs.statSync(itemPath).size;
-                                return { name: item, is_dir: isDir, size: size };
-                            });
-                            items.sort((a, b) => (a.is_dir === b.is_dir ? a.name.localeCompare(b.name) : (a.is_dir ? -1 : 1)));
-                            ws.send(JSON.stringify({ type: "fm_list", path: toVirtual(absPath), items: items }));
-                        }
-                    } else if (action === "read") {
-                        if (fs.existsSync(absPath) && fs.statSync(absPath).isFile()) {
-                            const content = fs.readFileSync(absPath, 'utf8');
-                            ws.send(JSON.stringify({ type: "fm_read", path: toVirtual(absPath), content: content }));
-                        }
-                    } else if (action === "write") {
-                        fs.writeFileSync(absPath, data.content || '', 'utf8');
-                    } else if (action === "upload") {
-                        const buffer = Buffer.from(data.content || '', 'base64');
-                        fs.writeFileSync(absPath, buffer);
-                    } else if (action === "create_file") {
-                        if (!fs.existsSync(absPath)) fs.writeFileSync(absPath, '', 'utf8');
-                    } else if (action === "create_dir") {
-                        if (!fs.existsSync(absPath)) fs.mkdirSync(absPath, { recursive: true });
-                    } else if (action === "delete") {
-                        if (fs.statSync(absPath).isDirectory()) fs.rmSync(absPath, { recursive: true, force: true });
-                        else fs.unlinkSync(absPath);
-                    }
-                } catch (fsErr) {
-                    ws.send(JSON.stringify({ type: "fm_error", message: fsErr.message }));
-                }
-                return;
-            }
-
-            const cmd = data.cmd;
-            if (!cmd) return;
-
-            if (cmd.startsWith("cd ")) {
-                const target = cmd.substring(3).trim();
-                const newDir = path.resolve(currentDir, target);
-                
-                if (!newDir.startsWith(WORKSPACE_DIR)) {
-                    ws.send(JSON.stringify({ type: "shell", data: "Access Denied.\n" }));
-                    return;
-                }
-                
-                if (fs.existsSync(newDir) && fs.statSync(newDir).isDirectory()) {
-                    currentDir = newDir;
-                    ws.send(JSON.stringify({ type: "shell", data: `Changed directory to ${toVirtual(currentDir)}\n` }));
-                } else {
-                    ws.send(JSON.stringify({ type: "shell", data: `cd: ${target}: No such file or directory\n` }));
-                }
-                return;
-            }
-
-            exec(cmd, { cwd: currentDir }, (error, stdout, stderr) => {
-                if (stdout) ws.send(JSON.stringify({ type: "shell", data: stdout }));
-                if (stderr) ws.send(JSON.stringify({ type: "shell", data: stderr }));
-                if (error && !stdout && !stderr) ws.send(JSON.stringify({ type: "shell", data: `Error: ${error.message}\n` }));
-            });
-
-        } catch (e) { }
-    });
-});
+// (Add your existing Express/WebSocket server code below this)
