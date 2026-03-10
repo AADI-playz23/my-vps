@@ -16,8 +16,6 @@ on:
         required: false
       mega_pass:
         required: false
-      gdrive_token:
-        required: false
 
 jobs:
   boot:
@@ -25,26 +23,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Cloudflared
+        run: |
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
       - name: Mount Cloud Storage (Premium Only)
         env:
           PLAN: ${{ github.event.inputs.plan }}
           CLOUD: ${{ github.event.inputs.cloud }}
           MEGA_USER: ${{ github.event.inputs.mega_user }}
           MEGA_PASS: ${{ github.event.inputs.mega_pass }}
-          GDRIVE_TOKEN: ${{ github.event.inputs.gdrive_token }}
         run: |
           mkdir -p workspace/external_drive
-          if [ "$CLOUD" != "none" ] && [ "$PLAN" != "free" ]; then
+          if [ "$CLOUD" == "mega" ] && [ "$PLAN" != "free" ]; then
             sudo apt-get update && sudo apt-get install -y rclone fuse
             mkdir -p ~/.config/rclone/
-            if [ "$CLOUD" == "mega" ]; then
-              rclone config create my_cloud mega user "$MEGA_USER" pass "$MEGA_PASS"
-            elif [ "$CLOUD" == "gdrive" ]; then
-              echo "[my_cloud]" > ~/.config/rclone/rclone.conf
-              echo "type = drive" >> ~/.config/rclone/rclone.conf
-              echo "scope = drive" >> ~/.config/rclone/rclone.conf
-              echo "token = $GDRIVE_TOKEN" >> ~/.config/rclone/rclone.conf
-            fi
+            rclone config create my_cloud mega user "$MEGA_USER" pass "$MEGA_PASS"
             rclone mount my_cloud:/ workspace/external_drive --vfs-cache-mode writes --daemon
           fi
 
@@ -53,21 +48,37 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y xfce4 tightvncserver novnc
 
-      - name: Boot Engine & Publish URL
+      - name: Boot Engine & Cloudflare Tunnels
         env:
           USER: ${{ github.event.inputs.username }}
-          STORAGE_PAT: ${{ secrets.STORAGE_PATH }}
+          PLAN: ${{ github.event.inputs.plan }}
+          UI: ${{ github.event.inputs.ui }}
+          STORAGE_PAT: ${{ secrets.STORAGE_PAT }}
         run: |
+          # 1. Start Terminal Engine & Tunnel
           STORAGE_PATH="./workspace" nohup node server.js > server.log 2>&1 &
-          ssh -R 80:127.0.0.1:8765 nokey@localhost.run -o StrictHostKeyChecking=no -T > tunnel.log 2>&1 &
-          sleep 15
-          URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.lhr\.life' tunnel.log | head -n 1)
+          nohup cloudflared tunnel --url http://localhost:8765 > term_tunnel.log 2>&1 &
+
+          VNC_URL="null"
           
+          # 2. Start Desktop Engine & Tunnel (If Paid + Requested)
+          if [ "$UI" == "desktop" ] && [ "$PLAN" != "free" ]; then
+             USER=root vncserver :1 -geometry 1280x720 -depth 24
+             nohup /usr/share/novnc/utils/launch.sh --vnc localhost:5901 --listen 6080 > novnc.log 2>&1 &
+             nohup cloudflared tunnel --url http://localhost:6080 > vnc_tunnel.log 2>&1 &
+             sleep 15
+             VNC_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' vnc_tunnel.log | head -n 1)
+          fi
+          
+          sleep 15
+          TERM_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' term_tunnel.log | head -n 1)
+          
+          # 3. Publish to Session File
           git clone https://x-access-token:$STORAGE_PAT@github.com/AADI-playz23/vps-disk.git update
           cd update
-          mkdir -p session && echo "$URL" > "session/$USER.txt"
+          mkdir -p session && echo "$TERM_URL|$VNC_URL" > "session/$USER.txt"
           git config user.name "AbsoraBot"
           git config user.email "bot@absora.local"
           git add session/
-          git commit -m "Tunnel updated for $USER"
+          git commit -m "Tunnels updated for $USER"
           git push origin main
