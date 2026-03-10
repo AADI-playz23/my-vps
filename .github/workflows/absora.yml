@@ -1,8 +1,10 @@
-name: BugVPS Compute Node
+name: Absora Compute Core
 on:
   workflow_dispatch:
     inputs:
       username:
+        required: true
+      plan:
         required: true
       os:
         required: false
@@ -18,23 +20,23 @@ on:
         required: false
 
 jobs:
-  ignite_node:
+  boot:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Mount Cloud Storage (Rclone)
+      - name: Mount Cloud Storage (Premium Only)
         env:
+          PLAN: ${{ github.event.inputs.plan }}
           CLOUD: ${{ github.event.inputs.cloud }}
           MEGA_USER: ${{ github.event.inputs.mega_user }}
           MEGA_PASS: ${{ github.event.inputs.mega_pass }}
           GDRIVE_TOKEN: ${{ github.event.inputs.gdrive_token }}
         run: |
           mkdir -p workspace/external_drive
-          if [ "$CLOUD" != "none" ]; then
+          if [ "$CLOUD" != "none" ] && [ "$PLAN" != "free" ]; then
             sudo apt-get update && sudo apt-get install -y rclone fuse
             mkdir -p ~/.config/rclone/
-            
             if [ "$CLOUD" == "mega" ]; then
               rclone config create my_cloud mega user "$MEGA_USER" pass "$MEGA_PASS"
             elif [ "$CLOUD" == "gdrive" ]; then
@@ -43,15 +45,13 @@ jobs:
               echo "scope = drive" >> ~/.config/rclone/rclone.conf
               echo "token = $GDRIVE_TOKEN" >> ~/.config/rclone/rclone.conf
             fi
-            
             rclone mount my_cloud:/ workspace/external_drive --vfs-cache-mode writes --daemon
           fi
 
-      - name: Setup GUI Desktop (If Requested)
-        if: ${{ github.event.inputs.ui == 'desktop' }}
+      - name: Setup Desktop (Premium Only)
+        if: ${{ github.event.inputs.ui == 'desktop' && github.event.inputs.plan != 'free' }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xfce4 tightvncserver novnc
+          sudo apt-get update && sudo apt-get install -y xfce4 tightvncserver novnc
 
       - name: Boot Engine & Publish URL
         env:
@@ -60,15 +60,14 @@ jobs:
         run: |
           STORAGE_PATH="./workspace" nohup node server.js > server.log 2>&1 &
           ssh -R 80:127.0.0.1:8765 nokey@localhost.run -o StrictHostKeyChecking=no -T > tunnel.log 2>&1 &
-          
           sleep 15
           URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.lhr\.life' tunnel.log | head -n 1)
           
           git clone https://x-access-token:$STORAGE_PAT@github.com/AADI-playz23/vps-disk.git update
           cd update
           mkdir -p session && echo "$URL" > "session/$USER.txt"
-          git config user.name "BugVPSBot"
-          git config user.email "bot@bugvps.local"
+          git config user.name "AbsoraBot"
+          git config user.email "bot@absora.local"
           git add session/
-          git commit -m "WSS Link updated for $USER"
+          git commit -m "Tunnel updated for $USER"
           git push origin main
