@@ -16,7 +16,7 @@ setInterval(() => {
             if (ps.includes(app)) {
                 console.log(`[SECURITY] Banning user for ${app}`);
                 // Tell the MySQL database to permanently ban this user
-                execSync(`curl -s -X POST http://abvps.rf.gd/api.php -H "X-ABSORA-KEY: absora_master_key_2026" -d "action=ban_user&username=${USERNAME}&reason=Hosting ${app}"`);
+                execSync(`curl -s -X POST http://abvps.gt.tc/api.php -H "X-ABSORA-KEY: absora_master_key_2026" -d "action=ban_user&username=${USERNAME}&reason=Hosting ${app}"`);
                 process.exit(1); 
             }
         }
