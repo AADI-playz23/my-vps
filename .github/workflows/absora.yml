@@ -1,73 +1,74 @@
-name: Absora Compute Core
-
+name: BugVPS Compute Node
 on:
-  repository_dispatch:
-    types: [launch_node]
+  workflow_dispatch:
+    inputs:
+      username:
+        required: true
+      os:
+        required: false
+      ui:
+        required: false
+      cloud:
+        required: false
+      mega_user:
+        required: false
+      mega_pass:
+        required: false
+      gdrive_token:
+        required: false
 
 jobs:
-  boot_sequence:
+  ignite_node:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Compute Repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Provision Infrastructure & Storage
+      - name: Mount Cloud Storage (Rclone)
         env:
-          VPS_USER: ${{ github.event.client_payload.username }}
-          CLOUD: ${{ github.event.client_payload.cloud }}
-          TOKEN: ${{ github.event.client_payload.token }}
-          PLAN: ${{ github.event.client_payload.plan }}
-          VAULT: ${{ github.event.client_payload.vault }}
-          STORAGE_PAT: ${{ secrets.STORAGE_PAT }}
+          CLOUD: ${{ github.event.inputs.cloud }}
+          MEGA_USER: ${{ github.event.inputs.mega_user }}
+          MEGA_PASS: ${{ github.event.inputs.mega_pass }}
+          GDRIVE_TOKEN: ${{ github.event.inputs.gdrive_token }}
         run: |
-          mkdir -p $GITHUB_WORKSPACE/vault
-          
-          # Base Git Vault Sync
-          if [ "$PLAN" != "free" ]; then
-             git clone https://x-access-token:${STORAGE_PATH}@github.com/AADI-playz23/${VAULT}.git vault_data
-             cp -r vault_data/${VPS_USER}/* $GITHUB_WORKSPACE/vault/ || true
-          fi
-          
-          # External Cloud Mounting (BYOS)
-          if [[ "$CLOUD" != "none" && "$TOKEN" != "" ]]; then
-              sudo apt-get install -y rclone fuse
-              mkdir -p ~/.config/rclone/
-              echo -e "$TOKEN" > ~/.config/rclone/rclone.conf
-              mkdir -p $GITHUB_WORKSPACE/vault/external_drive
-              rclone mount my_cloud:/ $GITHUB_WORKSPACE/vault/external_drive --vfs-cache-mode writes --daemon
-              echo "external_drive/" >> $GITHUB_WORKSPACE/vault/.gitignore
+          mkdir -p workspace/external_drive
+          if [ "$CLOUD" != "none" ]; then
+            sudo apt-get update && sudo apt-get install -y rclone fuse
+            mkdir -p ~/.config/rclone/
+            
+            if [ "$CLOUD" == "mega" ]; then
+              rclone config create my_cloud mega user "$MEGA_USER" pass "$MEGA_PASS"
+            elif [ "$CLOUD" == "gdrive" ]; then
+              echo "[my_cloud]" > ~/.config/rclone/rclone.conf
+              echo "type = drive" >> ~/.config/rclone/rclone.conf
+              echo "scope = drive" >> ~/.config/rclone/rclone.conf
+              echo "token = $GDRIVE_TOKEN" >> ~/.config/rclone/rclone.conf
+            fi
+            
+            rclone mount my_cloud:/ workspace/external_drive --vfs-cache-mode writes --daemon
           fi
 
-      - name: Prepare GUI Desktop (If Requested)
-        if: ${{ github.event.client_payload.ui == 'desktop' }}
+      - name: Setup GUI Desktop (If Requested)
+        if: ${{ github.event.inputs.ui == 'desktop' }}
         run: |
-          echo "Installing Desktop Environment..."
           sudo apt-get update
           sudo apt-get install -y xfce4 tightvncserver novnc
 
-      - name: Start Engine & Tunnel
+      - name: Boot Engine & Publish URL
         env:
-          VPS_USER: ${{ github.event.client_payload.username }}
-          OS_CHOICE: ${{ github.event.client_payload.os }}
-          PLAN: ${{ github.event.client_payload.plan }}
+          USER: ${{ github.event.inputs.username }}
+          STORAGE_PAT: ${{ secrets.STORAGE_PAT }}
         run: |
-          # Pass PLAN to Node.js environment
-          export PLAN="$PLAN"
-          STORAGE_PATH="$GITHUB_WORKSPACE/vault" nohup node server.js > server.log 2>&1 &
-          
+          STORAGE_PATH="./workspace" nohup node server.js > server.log 2>&1 &
           ssh -R 80:127.0.0.1:8765 nokey@localhost.run -o StrictHostKeyChecking=no -T > tunnel.log 2>&1 &
           
           sleep 15
-          TUNNEL_URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.lhr\.life' tunnel.log | head -n 1)
+          URL=$(grep -Eo 'https://[a-zA-Z0-9-]+\.lhr\.life' tunnel.log | head -n 1)
           
-          # Save tunnel to storage so the frontend can find it
-          cd ../
-          git clone https://x-access-token:${{ secrets.STORAGE_PAT }}@github.com/AADI-playz23/my-vps.git storage_update
-          cd storage_update
-          mkdir -p session
-          echo "$TUNNEL_URL" > "session/${VPS_USER}.txt"
-          git config user.email "bot@absora.local"
-          git config user.name "AbsoraBot"
-          git add session/ || true
-          git commit -m "Update session" || true
-          git push origin main || true
+          git clone https://x-access-token:$STORAGE_PAT@github.com/AADI-playz23/vps-disk.git update
+          cd update
+          mkdir -p session && echo "$URL" > "session/$USER.txt"
+          git config user.name "BugVPSBot"
+          git config user.email "bot@bugvps.local"
+          git add session/
+          git commit -m "WSS Link updated for $USER"
+          git push origin main
