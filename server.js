@@ -1,13 +1,3 @@
-// ============================================================
-//  ABVPS — WebSocket Backend Server
-//  Site    : abvps.gt.tc
-//  Storage : Telegram Bot API  (files)
-//            InfinityFree MySQL (file_id index per user)
-//  Quota   : 1 GB per user
-//  Multi-user safe: every user has their own backup pointer
-//                   stored in MySQL — no pin collision
-// ============================================================
-
 const http            = require("http");
 const WebSocket       = require("ws");
 const { exec, spawn } = require("child_process");
@@ -16,55 +6,33 @@ const path            = require("path");
 const os              = require("os");
 const https           = require("https");
 
-// ── Configuration ──────────────────────────────────────────────
 const PORT         = process.env.PORT         || 8080;
 const USERNAME     = process.env.VPS_USER     || "guest";
+const PLAN         = process.env.PLAN         || "free"; // Get the user's plan
 const TG_TOKEN     = process.env.TG_BOT_TOKEN || "";
 const TG_CHAT_ID   = process.env.TG_CHAT_ID   || "";
 
-// InfinityFree MySQL — same credentials as db_config.php
-const DB_HOST      = process.env.DB_HOST      || "sql200.infinityfree.com";
-const DB_USER      = process.env.DB_USER      || "if0_xxxxxxxxx";
-const DB_PASS      = process.env.DB_PASS      || "YOUR_DB_PASSWORD";
-const DB_NAME      = process.env.DB_NAME      || "if0_xxxxxxxxx_bugvps";
+const DB_PROXY     = "https://abvps.gt.tc/db_proxy.php";
+const DB_SECRET    = process.env.DB_PROXY_SECRET || "CHANGE_THIS_SECRET";
 
 const USER_DIR     = path.join(os.homedir(), "abvps-workspace", USERNAME);
 const TMP_DIR      = os.tmpdir();
-
-const QUOTA_BYTES    = 1 * 1024 * 1024 * 1024; // 1 GB
+const QUOTA_BYTES  = 1 * 1024 * 1024 * 1024; // 1 GB
 const QUOTA_WARN_PCT = 0.85;
-
-// Caption tag for full backups in Telegram chat
-const TG_TAG = `ABVPS_BACKUP::${USERNAME}`;
-// ──────────────────────────────────────────────────────────────
+const TG_TAG       = `ABVPS_BACKUP::${USERNAME}`;
 
 fs.mkdirSync(USER_DIR, { recursive: true });
 process.chdir(USER_DIR);
 
-// ── Welcome file ───────────────────────────────────────────────
 const welcomePath    = path.join(USER_DIR, "welcome.txt");
 const WELCOME_CONTENT = `\
-╔══════════════════════════════════════════════════════╗
-║           Welcome to ABVPS — abvps.gt.tc             ║
-╚══════════════════════════════════════════════════════╝
+Hello, ${USERNAME}!
+Plan: ${PLAN.toUpperCase()}
 
-Hello, ${USERNAME}! Your personal VPS is ready.
-
-  • Files are backed up to Telegram cloud automatically.
-  • Storage limit : 1 GB
-  • Session time  : up to 55 minutes per node.
-
-Quick commands:
-  ls -la            list files
-  htop              system monitor (q to quit)
-  node --version    check Node.js
-  python3 --version check Python
-
-Happy hacking!
-— ABVPS Team @ abvps.gt.tc
+Free users: Data is deleted when you close this window.
+Paid users: Data is backed up to the cloud automatically.
 `;
 
-// ── Quota helpers ──────────────────────────────────────────────
 function getDirSize(dir) {
   let total = 0;
   try {
@@ -80,143 +48,69 @@ function getDirSize(dir) {
 function getQuotaInfo() {
   const used    = getDirSize(USER_DIR);
   const pct     = used / QUOTA_BYTES;
-  const usedMB  = (used        / (1024 * 1024)).toFixed(1);
+  const usedMB  = (used / (1024 * 1024)).toFixed(1);
   const quotaMB = (QUOTA_BYTES / (1024 * 1024)).toFixed(0);
-  return { used, quota: QUOTA_BYTES, pct, usedMB, quotaMB, remaining: Math.max(0, QUOTA_BYTES - used) };
+  return { used, quota: QUOTA_BYTES, pct, usedMB, quotaMB };
 }
 
 function quotaCheck(ws, newBytes = 0) {
   const q = getQuotaInfo();
   if (q.used + newBytes > QUOTA_BYTES) {
-    ws.send(JSON.stringify({
-      type:    "quota_error",
-      message: `Quota exceeded! ${q.usedMB} MB / ${q.quotaMB} MB used. ` +
-               `Need ${(newBytes / (1024 * 1024)).toFixed(1)} MB more. Delete files to free space.`
-    }));
+    ws.send(JSON.stringify({ type: "quota_error", message: "Quota exceeded! Delete files to free space." }));
     return true;
-  }
-  if (q.pct >= QUOTA_WARN_PCT) {
-    ws.send(JSON.stringify({
-      type:    "quota_warn",
-      message: `⚠ Storage at ${(q.pct * 100).toFixed(1)}% — ${q.usedMB} MB / ${q.quotaMB} MB`
-    }));
   }
   return false;
 }
 
-// ── MySQL helpers ──────────────────────────────────────────────
-
-const DB_PROXY = `https://abvps.gt.tc/db_proxy.php`;
-const DB_SECRET = process.env.DB_PROXY_SECRET || "CHANGE_THIS_SECRET";
-
 function dbQuery(sql, params = []) {
   return new Promise((resolve) => {
     const payload = JSON.stringify({ secret: DB_SECRET, sql, params });
-    const cmd = `curl -s -X POST "${DB_PROXY}" ` +
-                `-H "Content-Type: application/json" ` +
-                `-d '${payload.replace(/'/g, "'\\''")}'`;
+    const cmd = `curl -s -X POST "${DB_PROXY}" -H "Content-Type: application/json" -d '${payload.replace(/'/g, "'\\''")}'`;
     exec(cmd, (err, stdout) => {
-      if (err) { console.error("[DB] curl error:", err.message); return resolve(null); }
-      try { resolve(JSON.parse(stdout)); }
-      catch (e) { console.error("[DB] parse error:", stdout); resolve(null); }
+      if (err) return resolve(null);
+      try { resolve(JSON.parse(stdout)); } catch (e) { resolve(null); }
     });
   });
 }
 
 async function dbGetFileId() {
-  const r = await dbQuery(
-    "SELECT tg_file_id FROM user_storage WHERE username = ? ORDER BY updated_at DESC LIMIT 1",
-    [USERNAME]
-  );
+  const r = await dbQuery("SELECT tg_file_id FROM user_storage WHERE username = ? ORDER BY updated_at DESC LIMIT 1", [USERNAME]);
   if (r && r.rows && r.rows.length > 0) return r.rows[0].tg_file_id;
   return null;
 }
 
 async function dbSaveFileId(fileId) {
-  await dbQuery(
-    `INSERT INTO user_storage (username, tg_file_id, updated_at)
-     VALUES (?, ?, NOW())
-     ON DUPLICATE KEY UPDATE tg_file_id = VALUES(tg_file_id), updated_at = NOW()`,
-    [USERNAME, fileId]
-  );
-  console.log(`[DB] Saved file_id for ${USERNAME}: ${fileId}`);
+  await dbQuery("INSERT INTO user_storage (username, tg_file_id, updated_at) VALUES (?, ?, NOW()) ON DUPLICATE KEY UPDATE tg_file_id = VALUES(tg_file_id), updated_at = NOW()", [USERNAME, fileId]);
 }
-
-// ── Telegram API helpers ───────────────────────────────────────
 
 function tgAPI(method, params = {}) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(params);
-    const req  = https.request({
-      hostname: "api.telegram.org",
-      path:     `/bot${TG_TOKEN}/${method}`,
-      method:   "POST",
-      headers:  {
-        "Content-Type":   "application/json",
-        "Content-Length": Buffer.byteLength(body)
-      }
-    }, (res) => {
+    const req  = https.request({ hostname: "api.telegram.org", path: `/bot${TG_TOKEN}/${method}`, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } }, (res) => {
       let data = "";
       res.on("data", c => data += c);
-      res.on("end", () => {
-        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
-      });
+      res.on("end", () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } });
     });
-    req.on("error", reject);
-    req.write(body);
-    req.end();
+    req.on("error", reject); req.write(body); req.end();
   });
 }
 
 async function tgSend(text) {
   if (!TG_TOKEN || !TG_CHAT_ID) return;
-  try {
-    await tgAPI("sendMessage", { chat_id: TG_CHAT_ID, text, parse_mode: "HTML" });
-  } catch (e) {
-    console.error("[TG] sendMessage failed:", e.message);
-  }
+  try { await tgAPI("sendMessage", { chat_id: TG_CHAT_ID, text, parse_mode: "HTML" }); } catch (e) {}
 }
 
 function tgUploadArchive(filePath, caption) {
   return new Promise((resolve) => {
     if (!TG_TOKEN || !TG_CHAT_ID) return resolve(null);
-    const cmd = `curl -s ` +
-                `-F chat_id="${TG_CHAT_ID}" ` +
-                `-F caption="${caption}" ` +
-                `-F document=@"${filePath}" ` +
-                `"https://api.telegram.org/bot${TG_TOKEN}/sendDocument"`;
-    exec(cmd, (err, stdout) => {
-      if (err) { console.error("[TG] Upload error:", err.message); return resolve(null); }
-      try {
-        const r = JSON.parse(stdout);
-        if (r.ok) {
-          resolve({
-            file_id:    r.result.document.file_id,
-            message_id: r.result.message_id
-          });
-        } else {
-          console.error("[TG] Upload failed:", r.description);
-          resolve(null);
-        }
-      } catch (e) { resolve(null); }
-    });
-  });
-}
-
-function tgUploadFile(filePath, caption) {
-  return new Promise((resolve) => {
-    if (!TG_TOKEN || !TG_CHAT_ID) return resolve(null);
-    const cmd = `curl -s ` +
-                `-F chat_id="${TG_CHAT_ID}" ` +
-                `-F caption="${caption}" ` +
-                `-F document=@"${filePath}" ` +
-                `"https://api.telegram.org/bot${TG_TOKEN}/sendDocument"`;
+    const cmd = `curl -s -F chat_id="${TG_CHAT_ID}" -F caption="${caption}" -F document=@"${filePath}" "https://api.telegram.org/bot${TG_TOKEN}/sendDocument"`;
     exec(cmd, (err, stdout) => {
       if (err) return resolve(null);
       try {
         const r = JSON.parse(stdout);
-        resolve(r.ok ? r.result.document.file_id : null);
-      } catch { resolve(null); }
+        if (r.ok) resolve({ file_id: r.result.document.file_id });
+        else resolve(null);
+      } catch (e) { resolve(null); }
     });
   });
 }
@@ -227,173 +121,100 @@ async function tgDownloadFile(fileId, destPath) {
     const r = await tgAPI("getFile", { file_id: fileId });
     if (!r.ok) return false;
     const url = `https://api.telegram.org/file/bot${TG_TOKEN}/${r.result.file_path}`;
-    await new Promise((res, rej) => {
-      exec(`curl -s -o "${destPath}" "${url}"`, (err) => err ? rej(err) : res());
-    });
+    await new Promise((res, rej) => { exec(`curl -s -o "${destPath}" "${url}"`, (err) => err ? rej(err) : res()); });
     return fs.existsSync(destPath);
-  } catch (e) {
-    console.error("[TG] Download failed:", e.message);
-    return false;
-  }
+  } catch (e) { return false; }
 }
 
-// ── Workspace Restore ─────────────────────────────────────────
 async function pullFromTelegram(callback) {
-  console.log(`[TG] Restoring workspace for: ${USERNAME}`);
-
-  if (!TG_TOKEN || !TG_CHAT_ID) {
-    console.warn("[TG] No credentials — skipping restore");
+  // Free users don't get their old files back
+  if (PLAN === "free") {
+    console.log("Free plan - fresh start.");
     if (!fs.existsSync(welcomePath)) fs.writeFileSync(welcomePath, WELCOME_CONTENT, "utf8");
     return callback && callback();
   }
 
   const fileId = await dbGetFileId();
-
   if (!fileId) {
-    console.log(`[TG] No backup found for ${USERNAME} — fresh workspace`);
     if (!fs.existsSync(welcomePath)) fs.writeFileSync(welcomePath, WELCOME_CONTENT, "utf8");
-    await tgSend(`📦 <b>${USERNAME}</b> — new workspace created`);
     return callback && callback();
   }
 
-  console.log(`[TG] Found file_id for ${USERNAME}: ${fileId}`);
   const archivePath = path.join(TMP_DIR, `restore_${USERNAME}.tar.gz`);
   const ok = await tgDownloadFile(fileId, archivePath);
 
   if (!ok) {
-    console.error("[TG] Restore download failed — fresh start");
     if (!fs.existsSync(welcomePath)) fs.writeFileSync(welcomePath, WELCOME_CONTENT, "utf8");
     return callback && callback();
   }
 
   exec(`tar -xzf "${archivePath}" -C "${USER_DIR}" --strip-components=1`, (err) => {
     fs.unlink(archivePath, () => {});
-    if (err) console.error("[TG] Extract failed:", err.message);
-    else     console.log(`[TG] Workspace restored for ${USERNAME}`);
     if (!fs.existsSync(welcomePath)) fs.writeFileSync(welcomePath, WELCOME_CONTENT, "utf8");
     callback && callback();
   });
 }
 
-// ── Single file push ──────────────────────────────────────────
-const pendingPush = new Map();
-
-function schedulePush(absPath, label = "sync") {
-  if (!fs.existsSync(absPath)) return;
-  if (pendingPush.has(absPath)) clearTimeout(pendingPush.get(absPath));
-  pendingPush.set(absPath, setTimeout(async () => {
-    pendingPush.delete(absPath);
-    if (!fs.existsSync(absPath)) return;
-    const relPath = absPath.replace(USER_DIR, "").replace(/^\//, "");
-    const caption = `ABVPS_FILE::${USERNAME}::${relPath} [${label}]`;
-    console.log(`[TG] Real-time push: ${relPath}`);
-    await tgUploadFile(absPath, caption);
-  }, 3000));
-}
-
-// ── Full Backup ───────────────────────────────────────────────
 let backupInProgress = false;
 
 async function fullBackupToTelegram() {
   if (!TG_TOKEN || !TG_CHAT_ID) return;
   if (backupInProgress) return;
-  backupInProgress = true;
+  
+  // Free users don't get a backup, we just let their files delete
+  if (PLAN === "free") {
+    console.log("Free plan - not saving files.");
+    return;
+  }
 
+  backupInProgress = true;
   const archiveName = `abvps_${USERNAME}_${Date.now()}.tar.gz`;
   const archivePath = path.join(TMP_DIR, archiveName);
 
-  console.log(`[TG] Full backup starting for ${USERNAME}...`);
-
   const tarErr = await new Promise(res => {
-    exec(
-      `tar -czf "${archivePath}" -C "${path.dirname(USER_DIR)}" "${path.basename(USER_DIR)}"`,
-      err => res(err)
-    );
+    exec(`tar -czf "${archivePath}" -C "${path.dirname(USER_DIR)}" "${path.basename(USER_DIR)}"`, err => res(err));
   });
 
   if (tarErr || !fs.existsSync(archivePath)) {
-    console.error("[TG] Archive creation failed");
-    backupInProgress = false;
-    return;
+    backupInProgress = false; return;
   }
 
-  const sizeMB  = (fs.statSync(archivePath).size / (1024 * 1024)).toFixed(1);
-  const caption = `${TG_TAG}\nSize: ${sizeMB} MB | ${new Date().toISOString()}`;
-
-  console.log(`[TG] Uploading backup (${sizeMB} MB)...`);
-  const result = await tgUploadArchive(archivePath, caption);
+  const result = await tgUploadArchive(archivePath, `${TG_TAG}\nSaved.`);
   fs.unlink(archivePath, () => {});
 
-  if (!result) {
-    console.error("[TG] Backup upload failed");
-    backupInProgress = false;
-    return;
+  if (result) {
+    await dbSaveFileId(result.file_id);
+    await tgSend(`✅ <b>${USERNAME}</b> backup saved.`);
   }
-
-  await dbSaveFileId(result.file_id);
-
-  console.log(`[TG] Full backup complete for ${USERNAME} — file_id: ${result.file_id}`);
-  await tgSend(`✅ <b>${USERNAME}</b> backup saved\nSize: ${sizeMB} MB`);
 
   backupInProgress = false;
 }
 
-// ── Servers ────────────────────────────────────────────────────
 const server = http.createServer((req, res) => {
-  if (req.url === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", user: USERNAME }));
-    return;
-  }
   res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("ABVPS Online — abvps.gt.tc\n");
+  res.end("Server is running\n");
 });
 
 const wss = new WebSocket.Server({ server });
 
 wss.on("connection", (ws) => {
-  console.log(`[WS] Connected — ${USERNAME}`);
-
   const q = getQuotaInfo();
   ws.send(JSON.stringify({
     type: "shell",
-    data: `\r\n\x1b[36m╔══════════════════════════════════════════╗\r\n` +
-          `║           ABVPS Glass Core Online          ║\r\n` +
-          `║  User  : ${USERNAME.padEnd(32)}║\r\n` +
-          `║  Store : Telegram ☁  (per-user isolated) ║\r\n` +
-          `║  Quota : ${(q.usedMB + " MB / " + q.quotaMB + " MB").padEnd(32)}║\r\n` +
-          `╚══════════════════════════════════════════╝\x1b[0m\r\n`
+    data: `\r\n\x1b[36mConnected to ABVPS\r\nUser: ${USERNAME}\r\nPlan: ${PLAN.toUpperCase()}\x1b[0m\r\n`
   }));
-  ws.send(JSON.stringify({ type: "quota_update", ...getQuotaInfo() }));
+  ws.send(JSON.stringify({ type: "quota_update", ...q }));
 
-  let shell = spawn("bash", [], {
-    cwd:   USER_DIR,
-    env:   { ...process.env, TERM: "xterm-256color", HOME: os.homedir() },
-    shell: false
-  });
+  let shell = spawn("bash", [], { cwd: USER_DIR, env: { ...process.env, TERM: "xterm-256color", HOME: os.homedir() }, shell: false });
 
-  shell.stdout.on("data", d => {
-    if (ws.readyState === WebSocket.OPEN)
-      ws.send(JSON.stringify({ type: "shell", data: d.toString() }));
-  });
-  shell.stderr.on("data", d => {
-    if (ws.readyState === WebSocket.OPEN)
-      ws.send(JSON.stringify({ type: "shell", data: d.toString() }));
-  });
-  shell.on("close", code => {
-    if (ws.readyState === WebSocket.OPEN)
-      ws.send(JSON.stringify({ type: "shell", data: `\r\n[Shell exited: ${code}]\r\n` }));
-  });
+  shell.stdout.on("data", d => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "shell", data: d.toString() })); });
+  shell.stderr.on("data", d => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "shell", data: d.toString() })); });
 
   const quotaWatcher = setInterval(() => {
     if (ws.readyState !== WebSocket.OPEN) return clearInterval(quotaWatcher);
     const q2 = getQuotaInfo();
     ws.send(JSON.stringify({ type: "quota_update", ...q2 }));
     if (q2.used > QUOTA_BYTES) {
-      ws.send(JSON.stringify({
-        type:    "quota_error",
-        message: `QUOTA EXCEEDED (${q2.usedMB} MB). Shell paused. Delete files to resume.`
-      }));
       try { shell.kill("SIGSTOP"); } catch {}
     } else {
       try { shell.kill("SIGCONT"); } catch {}
@@ -401,160 +222,53 @@ wss.on("connection", (ws) => {
   }, 15000);
 
   ws.on("message", raw => {
-    let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
+    let msg; try { msg = JSON.parse(raw); } catch { return; }
 
     if (msg.type === "shell") {
       if (shell && shell.stdin.writable) shell.stdin.write((msg.cmd || "") + "\n");
-
-    } else if (msg.type === "get_quota") {
-      ws.send(JSON.stringify({ type: "quota_update", ...getQuotaInfo() }));
-
     } else if (msg.type === "fm") {
-      const action   = msg.action;
-      const safePath = resolveSafe(msg.path || "/");
+      const safePath = path.resolve(USER_DIR, (msg.path || "/").replace(/^\//, ""));
+      if (!safePath.startsWith(USER_DIR)) return;
 
-      if (action === "list") {
+      if (msg.action === "list") {
         try {
-          const entries = fs.readdirSync(safePath, { withFileTypes: true })
-            .map(e => {
-              const full = path.join(safePath, e.name);
-              let size = 0;
-              try { size = e.isDirectory() ? getDirSize(full) : fs.statSync(full).size; } catch {}
-              return { name: e.name, is_dir: e.isDirectory(), size };
-            })
-            .sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name));
-          ws.send(JSON.stringify({ type: "fm_list", path: toRelative(safePath), items: entries }));
-          ws.send(JSON.stringify({ type: "quota_update", ...getQuotaInfo() }));
-        } catch (e) {
-          ws.send(JSON.stringify({ type: "fm_error", message: "Cannot list: " + e.message }));
+          const entries = fs.readdirSync(safePath, { withFileTypes: true }).map(e => ({ name: e.name, is_dir: e.isDirectory() }));
+          ws.send(JSON.stringify({ type: "fm_list", path: (msg.path || "/"), items: entries }));
+        } catch (e) {}
+      } else if (msg.action === "read") {
+        try { ws.send(JSON.stringify({ type: "fm_read", content: fs.readFileSync(safePath, "utf8") })); } catch (e) {}
+      } else if (msg.action === "write") {
+        if (!quotaCheck(ws, Buffer.byteLength(msg.content || ""))) {
+          try { fs.mkdirSync(path.dirname(safePath), { recursive: true }); fs.writeFileSync(safePath, msg.content, "utf8"); ws.send(JSON.stringify({ type: "fm_refresh_trigger" })); } catch (e) {}
         }
-
-      } else if (action === "read") {
-        try {
-          const content = fs.readFileSync(safePath, "utf8");
-          ws.send(JSON.stringify({ type: "fm_read", content }));
-        } catch (e) {
-          ws.send(JSON.stringify({ type: "fm_error", message: "Cannot read: " + e.message }));
+      } else if (msg.action === "delete") {
+        try { fs.rmSync(safePath, { recursive: true, force: true }); ws.send(JSON.stringify({ type: "fm_refresh_trigger" })); } catch (e) {}
+      } else if (msg.action === "create_file" || msg.action === "create_dir") {
+        if (!quotaCheck(ws, 0)) {
+          try { 
+            if (msg.action === "create_file") fs.writeFileSync(safePath, "", "utf8");
+            else fs.mkdirSync(safePath, { recursive: true });
+            ws.send(JSON.stringify({ type: "fm_refresh_trigger" })); 
+          } catch (e) {}
         }
-
-      } else if (action === "write") {
-        const newContent = msg.content || "";
-        let existingSize = 0;
-        try { existingSize = fs.statSync(safePath).size; } catch {}
-        const delta = Buffer.byteLength(newContent, "utf8") - existingSize;
-        if (delta > 0 && quotaCheck(ws, delta)) return;
-        try {
-          fs.mkdirSync(path.dirname(safePath), { recursive: true });
-          fs.writeFileSync(safePath, newContent, "utf8");
-          schedulePush(safePath, "edit");
-          ws.send(JSON.stringify({ type: "fm_refresh_trigger" }));
-          ws.send(JSON.stringify({ type: "quota_update", ...getQuotaInfo() }));
-        } catch (e) {
-          ws.send(JSON.stringify({ type: "fm_error", message: "Cannot write: " + e.message }));
-        }
-
-      } else if (action === "delete") {
-        try {
-          const stat = fs.statSync(safePath);
-          if (stat.isDirectory()) fs.rmSync(safePath, { recursive: true, force: true });
-          else                    fs.unlinkSync(safePath);
-          tgSend(`🗑 <b>${USERNAME}</b> deleted: <code>${toRelative(safePath)}</code>`);
-          ws.send(JSON.stringify({ type: "fm_refresh_trigger" }));
-          ws.send(JSON.stringify({ type: "quota_update", ...getQuotaInfo() }));
-        } catch (e) {
-          ws.send(JSON.stringify({ type: "fm_error", message: "Cannot delete: " + e.message }));
-        }
-
-      } else if (action === "create_file") {
-        if (quotaCheck(ws, 0)) return;
-        try {
-          fs.mkdirSync(path.dirname(safePath), { recursive: true });
-          fs.writeFileSync(safePath, "", "utf8");
-          schedulePush(safePath, "create");
-          ws.send(JSON.stringify({ type: "fm_refresh_trigger" }));
-          ws.send(JSON.stringify({ type: "quota_update", ...getQuotaInfo() }));
-        } catch (e) {
-          ws.send(JSON.stringify({ type: "fm_error", message: "Cannot create file: " + e.message }));
-        }
-
-      } else if (action === "create_dir") {
-        if (quotaCheck(ws, 0)) return;
-        try {
-          fs.mkdirSync(safePath, { recursive: true });
-          tgSend(`📁 <b>${USERNAME}</b> created folder: <code>${toRelative(safePath)}</code>`);
-          ws.send(JSON.stringify({ type: "fm_refresh_trigger" }));
-          ws.send(JSON.stringify({ type: "quota_update", ...getQuotaInfo() }));
-        } catch (e) {
-          ws.send(JSON.stringify({ type: "fm_error", message: "Cannot create folder: " + e.message }));
-        }
-
-      } else if (action === "upload") {
+      } else if (msg.action === "upload") {
         const buffer = Buffer.from(msg.content || "", "base64");
-        if (quotaCheck(ws, buffer.length)) return;
-        try {
-          fs.mkdirSync(path.dirname(safePath), { recursive: true });
-          fs.writeFileSync(safePath, buffer);
-          schedulePush(safePath, "upload");
-          ws.send(JSON.stringify({ type: "fm_refresh_trigger" }));
-          ws.send(JSON.stringify({ type: "quota_update", ...getQuotaInfo() }));
-        } catch (e) {
-          ws.send(JSON.stringify({ type: "fm_error", message: "Cannot upload: " + e.message }));
+        if (!quotaCheck(ws, buffer.length)) {
+          try { fs.mkdirSync(path.dirname(safePath), { recursive: true }); fs.writeFileSync(safePath, buffer); ws.send(JSON.stringify({ type: "fm_refresh_trigger" })); } catch (e) {}
         }
       }
     }
   });
 
   ws.on("close", async () => {
-    console.log(`[WS] ${USERNAME} disconnected — running full backup`);
     clearInterval(quotaWatcher);
     if (shell) shell.kill();
     await fullBackupToTelegram();
   });
-
-  ws.on("error", err => console.error("[WS] Error:", err.message));
 });
 
-// ── Path & Watcher ─────────────────────────────────────────────
-function resolveSafe(relPath) {
-  const r = path.resolve(USER_DIR, relPath.replace(/^\//, ""));
-  return r.startsWith(USER_DIR) ? r : USER_DIR;
-}
-function toRelative(absPath) {
-  const r = absPath.replace(USER_DIR, "") || "/";
-  return r.startsWith("/") ? r : "/" + r;
-}
-
-const WATCH_IGNORE = [ /node_modules/, /\.git\//, /\.npm/, /~$/, /\.swp$/, /\.tmp$/ ];
-
-function shouldIgnore(filePath) {
-  return WATCH_IGNORE.some(r => r.test(filePath));
-}
-
-function startFsWatcher() {
-  try {
-    const watcher = fs.watch(USER_DIR, { recursive: true }, (eventType, filename) => {
-      if (!filename) return;
-      const absPath = path.join(USER_DIR, filename);
-      if (shouldIgnore(absPath)) return;
-
-      try {
-        const stat = fs.statSync(absPath);
-        if (!stat.isFile()) return;
-        if (stat.size > 50 * 1024 * 1024) return; 
-        schedulePush(absPath, eventType === "rename" ? "create" : "edit");
-      } catch { }
-    });
-    watcher.on("error", err => console.error("[WATCH] Error:", err.message));
-  } catch (e) {
-    console.error("[WATCH] Could not start watcher:", e.message);
-  }
-}
-
-// ── Boot ───────────────────────────────────────────────────────
 pullFromTelegram(() => {
-  startFsWatcher();
   server.listen(PORT, "0.0.0.0", () => {
-    console.log(`[ABVPS] Online  port=${PORT}  user=${USERNAME}`);
+    console.log(`Ready on port ${PORT} for ${USERNAME} (Plan: ${PLAN})`);
   });
 });
