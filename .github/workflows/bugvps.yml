@@ -36,19 +36,17 @@ jobs:
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb
 
-      # ── Install display server ─────────────────────────────
       - name: Setup virtual display (Xvfb)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y xvfb x11vnc xdotool dbus-x11 pulseaudio
 
-          # Start virtual framebuffer display
+          # Start virtual display
           Xvfb :1 -screen 0 1280x720x24 &
           export DISPLAY=:1
           echo "DISPLAY=:1" >> $GITHUB_ENV
           sleep 2
 
-      # ── Install chosen OS environment in Docker ────────────
       - name: Install OS desktop environment
         env:
           OS_CHOICE: ${{ github.event.inputs.os }}
@@ -65,7 +63,6 @@ jobs:
 
           elif [ "$OS_CHOICE" = "kali" ]; then
             echo "Installing Kali tools + XFCE..."
-            # Add Kali repo for tools
             sudo apt-get install -y --no-install-recommends \
               xfce4 xfce4-terminal xfce4-taskmanager thunar mousepad \
               nmap wireshark-gtk metasploit-framework \
@@ -79,36 +76,36 @@ jobs:
               xfce4-whiskermenu-plugin 2>/dev/null || true
           fi
 
-          # Start XFCE session
+          # Start session
           startxfce4 &
           sleep 5
           echo "Desktop started."
 
-      # ── Setup VNC + websockify ─────────────────────────────
       - name: Start VNC server + websockify
         run: |
           export DISPLAY=:1
 
-          # Install websockify (bridges VNC to WebSocket for noVNC)
           pip3 install websockify --break-system-packages 2>/dev/null || pip install websockify
 
-          # Set VNC password
+          # Get the web viewer files
+          git clone https://github.com/novnc/noVNC.git /opt/novnc
+
+          # Set password
           mkdir -p ~/.vnc
           x11vnc -storepasswd abvps ~/.vnc/passwd
 
-          # Start x11vnc on port 5900
+          # Start VNC
           x11vnc -display :1 -rfbauth ~/.vnc/passwd -rfbport 5900 \
                  -forever -shared -noxdamage -noxfixes \
                  -o /tmp/x11vnc.log &
           sleep 3
 
-          # Start websockify: bridges :6080 (WebSocket) → :5900 (VNC)
-          websockify --daemon --web /dev/null 6080 localhost:5900
+          # Connect web viewer to VNC
+          websockify --daemon --web /opt/novnc 6080 localhost:5900
           sleep 2
           echo "VNC + websockify running."
           cat /tmp/x11vnc.log | tail -5
 
-      # ── Start ABVPS server.js (file manager + Telegram) ───
       - name: Start ABVPS server.js on port 8080
         env:
           VPS_USER:        ${{ github.event.inputs.username }}
@@ -123,7 +120,6 @@ jobs:
           echo "=== server.js boot ==="
           cat /tmp/abvps.log
 
-      # ── Open cloudflared tunnel for websockify (port 6080) ─
       - name: Open tunnel for noVNC (port 6080) & push link
         env:
           GH_TOKEN:   ${{ secrets.VPS_DISK_TOKEN }}
@@ -132,7 +128,6 @@ jobs:
           TG_CHAT:    ${{ secrets.TG_CHAT_ID }}
           OS_CHOICE:  ${{ github.event.inputs.os }}
         run: |
-          # Tunnel websockify port 6080 (noVNC WebSocket)
           cloudflared tunnel --url http://localhost:6080 > /tmp/cf_vnc.txt 2>&1 &
 
           LINK=""
@@ -147,7 +142,6 @@ jobs:
           fi
           echo "VNC Tunnel: $LINK"
 
-          # Push to vps-disk tunnel/username.txt
           FILE_PATH="tunnel/${USERNAME}.txt"
           API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
           CONTENT=$(echo -n "$LINK" | base64 -w 0)
@@ -167,7 +161,6 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$BODY"
 
-          # Notify Telegram
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🖥 <b>${USERNAME}</b> desktop online\\nOS: <code>${OS_CHOICE}</code>\\n${LINK}\",\"parse_mode\":\"HTML\"}" > /dev/null
