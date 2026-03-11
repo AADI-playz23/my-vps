@@ -104,11 +104,7 @@ function quotaCheck(ws, newBytes = 0) {
   return false;
 }
 
-// ── MySQL helpers (via curl to a thin PHP proxy on InfinityFree) ─
-// Because GitHub Actions runner cannot connect directly to InfinityFree
-// MySQL (it's firewalled). We expose a tiny PHP endpoint on the hosting
-// that accepts internal requests and returns JSON.
-// The PHP proxy (db_proxy.php) is included below as a separate file.
+// ── MySQL helpers ──────────────────────────────────────────────
 
 const DB_PROXY = `https://abvps.gt.tc/db_proxy.php`;
 const DB_SECRET = process.env.DB_PROXY_SECRET || "CHANGE_THIS_SECRET";
@@ -127,7 +123,6 @@ function dbQuery(sql, params = []) {
   });
 }
 
-/** Get the latest Telegram file_id for this user from MySQL */
 async function dbGetFileId() {
   const r = await dbQuery(
     "SELECT tg_file_id FROM user_storage WHERE username = ? ORDER BY updated_at DESC LIMIT 1",
@@ -137,9 +132,7 @@ async function dbGetFileId() {
   return null;
 }
 
-/** Save / update the Telegram file_id for this user in MySQL */
 async function dbSaveFileId(fileId) {
-  // Upsert: update if exists, insert if not
   await dbQuery(
     `INSERT INTO user_storage (username, tg_file_id, updated_at)
      VALUES (?, ?, NOW())
@@ -184,7 +177,6 @@ async function tgSend(text) {
   }
 }
 
-/** Upload a .tar.gz to Telegram, return { file_id, message_id } or null */
 function tgUploadArchive(filePath, caption) {
   return new Promise((resolve) => {
     if (!TG_TOKEN || !TG_CHAT_ID) return resolve(null);
@@ -211,7 +203,6 @@ function tgUploadArchive(filePath, caption) {
   });
 }
 
-/** Upload a single file to Telegram (real-time sync) */
 function tgUploadFile(filePath, caption) {
   return new Promise((resolve) => {
     if (!TG_TOKEN || !TG_CHAT_ID) return resolve(null);
@@ -230,7 +221,6 @@ function tgUploadFile(filePath, caption) {
   });
 }
 
-/** Download a Telegram file by file_id to destPath */
 async function tgDownloadFile(fileId, destPath) {
   if (!TG_TOKEN) return false;
   try {
@@ -247,9 +237,7 @@ async function tgDownloadFile(fileId, destPath) {
   }
 }
 
-// ── PULL: Restore workspace from Telegram on boot ─────────────
-// Each user's latest backup file_id is stored in MySQL.
-// No pin needed — completely isolated per user.
+// ── Workspace Restore ─────────────────────────────────────────
 async function pullFromTelegram(callback) {
   console.log(`[TG] Restoring workspace for: ${USERNAME}`);
 
@@ -259,7 +247,6 @@ async function pullFromTelegram(callback) {
     return callback && callback();
   }
 
-  // Look up this user's file_id from MySQL
   const fileId = await dbGetFileId();
 
   if (!fileId) {
@@ -288,8 +275,7 @@ async function pullFromTelegram(callback) {
   });
 }
 
-// ── REAL-TIME PUSH: single file → Telegram ────────────────────
-// Debounced per file — batches rapid edits into one upload per 3s
+// ── Single file push ──────────────────────────────────────────
 const pendingPush = new Map();
 
 function schedulePush(absPath, label = "sync") {
@@ -305,7 +291,7 @@ function schedulePush(absPath, label = "sync") {
   }, 3000));
 }
 
-// ── FULL BACKUP: entire workspace → Telegram on session end ───
+// ── Full Backup ───────────────────────────────────────────────
 let backupInProgress = false;
 
 async function fullBackupToTelegram() {
@@ -318,7 +304,6 @@ async function fullBackupToTelegram() {
 
   console.log(`[TG] Full backup starting for ${USERNAME}...`);
 
-  // Create tar.gz of entire user workspace
   const tarErr = await new Promise(res => {
     exec(
       `tar -czf "${archivePath}" -C "${path.dirname(USER_DIR)}" "${path.basename(USER_DIR)}"`,
@@ -345,7 +330,6 @@ async function fullBackupToTelegram() {
     return;
   }
 
-  // ── KEY: save new file_id to MySQL — isolated per user ──────
   await dbSaveFileId(result.file_id);
 
   console.log(`[TG] Full backup complete for ${USERNAME} — file_id: ${result.file_id}`);
@@ -354,7 +338,7 @@ async function fullBackupToTelegram() {
   backupInProgress = false;
 }
 
-// ── HTTP server ────────────────────────────────────────────────
+// ── Servers ────────────────────────────────────────────────────
 const server = http.createServer((req, res) => {
   if (req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -365,7 +349,6 @@ const server = http.createServer((req, res) => {
   res.end("ABVPS Online — abvps.gt.tc\n");
 });
 
-// ── WebSocket server ───────────────────────────────────────────
 const wss = new WebSocket.Server({ server });
 
 wss.on("connection", (ws) => {
@@ -375,7 +358,7 @@ wss.on("connection", (ws) => {
   ws.send(JSON.stringify({
     type: "shell",
     data: `\r\n\x1b[36m╔══════════════════════════════════════════╗\r\n` +
-          `║          ABVPS Glass Core Online         ║\r\n` +
+          `║           ABVPS Glass Core Online          ║\r\n` +
           `║  User  : ${USERNAME.padEnd(32)}║\r\n` +
           `║  Store : Telegram ☁  (per-user isolated) ║\r\n` +
           `║  Quota : ${(q.usedMB + " MB / " + q.quotaMB + " MB").padEnd(32)}║\r\n` +
@@ -383,7 +366,6 @@ wss.on("connection", (ws) => {
   }));
   ws.send(JSON.stringify({ type: "quota_update", ...getQuotaInfo() }));
 
-  // Bash shell
   let shell = spawn("bash", [], {
     cwd:   USER_DIR,
     env:   { ...process.env, TERM: "xterm-256color", HOME: os.homedir() },
@@ -403,7 +385,6 @@ wss.on("connection", (ws) => {
       ws.send(JSON.stringify({ type: "shell", data: `\r\n[Shell exited: ${code}]\r\n` }));
   });
 
-  // Quota watcher every 15s
   const quotaWatcher = setInterval(() => {
     if (ws.readyState !== WebSocket.OPEN) return clearInterval(quotaWatcher);
     const q2 = getQuotaInfo();
@@ -419,7 +400,6 @@ wss.on("connection", (ws) => {
     }
   }, 15000);
 
-  // Message router
   ws.on("message", raw => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
@@ -535,7 +515,7 @@ wss.on("connection", (ws) => {
   ws.on("error", err => console.error("[WS] Error:", err.message));
 });
 
-// ── Path helpers ───────────────────────────────────────────────
+// ── Path & Watcher ─────────────────────────────────────────────
 function resolveSafe(relPath) {
   const r = path.resolve(USER_DIR, relPath.replace(/^\//, ""));
   return r.startsWith(USER_DIR) ? r : USER_DIR;
@@ -545,20 +525,7 @@ function toRelative(absPath) {
   return r.startsWith("/") ? r : "/" + r;
 }
 
-// ── Filesystem Watcher ────────────────────────────────────────
-// Watches USER_DIR recursively for ANY file change — including files
-// created/modified by shell commands (wget, git, npm, echo, etc.)
-// Uses a debounce map so rapid changes don't spam Telegram.
-//
-// Ignored patterns: temp files, node_modules, .git internals
-const WATCH_IGNORE = [
-  /node_modules/,
-  /\.git\//,
-  /\.npm/,
-  /~$/,           // editor temp files
-  /\.swp$/,       // vim swap
-  /\.tmp$/,
-];
+const WATCH_IGNORE = [ /node_modules/, /\.git\//, /\.npm/, /~$/, /\.swp$/, /\.tmp$/ ];
 
 function shouldIgnore(filePath) {
   return WATCH_IGNORE.some(r => r.test(filePath));
@@ -566,30 +533,19 @@ function shouldIgnore(filePath) {
 
 function startFsWatcher() {
   try {
-    // fs.watch with recursive:true works on Linux (GitHub Actions = Linux)
     const watcher = fs.watch(USER_DIR, { recursive: true }, (eventType, filename) => {
       if (!filename) return;
       const absPath = path.join(USER_DIR, filename);
       if (shouldIgnore(absPath)) return;
 
-      // Only push files that actually exist (ignore delete events here —
-      // deletes are already handled by the file manager action above)
       try {
         const stat = fs.statSync(absPath);
         if (!stat.isFile()) return;
-        // Skip very large files from real-time push (>50 MB) — full backup handles those
-        if (stat.size > 50 * 1024 * 1024) {
-          console.log(`[WATCH] Skipping large file for real-time push: ${filename} (${(stat.size/1024/1024).toFixed(1)} MB)`);
-          return;
-        }
+        if (stat.size > 50 * 1024 * 1024) return; 
         schedulePush(absPath, eventType === "rename" ? "create" : "edit");
-      } catch {
-        // File was deleted — ignore, full backup covers it
-      }
+      } catch { }
     });
-
     watcher.on("error", err => console.error("[WATCH] Error:", err.message));
-    console.log(`[WATCH] Filesystem watcher active on: ${USER_DIR}`);
   } catch (e) {
     console.error("[WATCH] Could not start watcher:", e.message);
   }
@@ -597,10 +553,8 @@ function startFsWatcher() {
 
 // ── Boot ───────────────────────────────────────────────────────
 pullFromTelegram(() => {
-  startFsWatcher();   // ← watches ALL file changes including shell commands
+  startFsWatcher();
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`[ABVPS] Online  port=${PORT}  user=${USERNAME}`);
-    console.log(`[ABVPS] Storage: Telegram + MySQL index (multi-user safe)`);
-    console.log(`[ABVPS] Every file change is watched and synced in real-time`);
   });
 });
