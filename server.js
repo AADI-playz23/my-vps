@@ -8,7 +8,7 @@ const https           = require("https");
 
 const PORT         = process.env.PORT         || 8080;
 const USERNAME     = process.env.VPS_USER     || "guest";
-const PLAN         = process.env.PLAN         || "free"; // Get the user's plan
+const PLAN         = process.env.PLAN         || "free"; 
 const TG_TOKEN     = process.env.TG_BOT_TOKEN || "";
 const TG_CHAT_ID   = process.env.TG_CHAT_ID   || "";
 
@@ -18,8 +18,6 @@ const DB_SECRET    = process.env.DB_PROXY_SECRET || "CHANGE_THIS_SECRET";
 const USER_DIR     = path.join(os.homedir(), "abvps-workspace", USERNAME);
 const TMP_DIR      = os.tmpdir();
 const QUOTA_BYTES  = 1 * 1024 * 1024 * 1024; // 1 GB
-const QUOTA_WARN_PCT = 0.85;
-const TG_TAG       = `ABVPS_BACKUP::${USERNAME}`;
 
 fs.mkdirSync(USER_DIR, { recursive: true });
 process.chdir(USER_DIR);
@@ -127,7 +125,6 @@ async function tgDownloadFile(fileId, destPath) {
 }
 
 async function pullFromTelegram(callback) {
-  // Free users don't get their old files back
   if (PLAN === "free") {
     console.log("Free plan - fresh start.");
     if (!fs.existsSync(welcomePath)) fs.writeFileSync(welcomePath, WELCOME_CONTENT, "utf8");
@@ -161,7 +158,6 @@ async function fullBackupToTelegram() {
   if (!TG_TOKEN || !TG_CHAT_ID) return;
   if (backupInProgress) return;
   
-  // Free users don't get a backup, we just let their files delete
   if (PLAN === "free") {
     console.log("Free plan - not saving files.");
     return;
@@ -179,7 +175,7 @@ async function fullBackupToTelegram() {
     backupInProgress = false; return;
   }
 
-  const result = await tgUploadArchive(archivePath, `${TG_TAG}\nSaved.`);
+  const result = await tgUploadArchive(archivePath, `ABVPS_BACKUP::${USERNAME}\nSaved.`);
   fs.unlink(archivePath, () => {});
 
   if (result) {
