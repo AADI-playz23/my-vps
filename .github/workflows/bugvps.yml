@@ -125,4 +125,65 @@ jobs:
 
       - name: Open tunnel & push link
         env:
-          GH_TOKEN:   ${{ secrets.VPS_DISK_
+          GH_TOKEN:   ${{ secrets.VPS_DISK_TOKEN }}
+          USERNAME:   ${{ github.event.inputs.username }}
+          OS_CHOICE:  ${{ github.event.inputs.os }}
+        run: |
+          cloudflared tunnel --url http://localhost:${{ env.VNC_PORT }} > /tmp/cf_vnc.txt 2>&1 &
+
+          LINK=""
+          for i in $(seq 1 50); do
+            LINK=$(grep -oP 'https://[a-z0-9\-]+\.trycloudflare\.com' /tmp/cf_vnc.txt 2>/dev/null | head -1)
+            [ -n "$LINK" ] && break
+            sleep 1
+          done
+
+          FILE_PATH="tunnel/${USERNAME}.txt"
+          API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
+          CONTENT=$(echo -n "$LINK" | base64 -w 0)
+
+          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" "$API_URL")
+          SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha',''))" 2>/dev/null || true)
+
+          if [ -n "$SHA" ]; then
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'Update tunnel','content':'${CONTENT}','sha':'${SHA}'}))")
+          else
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'New tunnel','content':'${CONTENT}'}))")
+          fi
+
+          curl -s -X PUT "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY"
+
+      - name: Wait and Relay Handoff
+        env:
+          GH_TOKEN:  ${{ secrets.VPS_DISK_TOKEN }}
+          USERNAME:  ${{ github.event.inputs.username }}
+          OS_CHOICE: ${{ github.event.inputs.os }}
+          PLAN:      ${{ github.event.inputs.plan }}
+        run: |
+          sleep 20700
+
+          if [ "$PLAN" != "free" ]; then
+            echo "Relay sequence initiated. Igniting next runner."
+            curl -X POST https://api.github.com/repos/AADI-playz23/my-vps/actions/workflows/bugvps.yml/dispatches \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"$USERNAME\",\"os\":\"$OS_CHOICE\",\"plan\":\"$PLAN\"}}"
+            sleep 60
+          fi
+          
+          echo "Time limit reached. Shutting down."
+
+      - name: Cleanup on exit
+        if: always()
+        env:
+          GH_TOKEN:  ${{ secrets.VPS_DISK_TOKEN }}
+          USERNAME:  ${{ github.event.inputs.username }}
+        run: |
+          FILE_PATH="tunnel/${USERNAME}.txt"
+          API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
+          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" "$API_URL")
+          SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])" 2>/dev/null || true)
+          if [ -n "$SHA" ]; then
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'Clean tunnel','sha':'${SHA}'}))")
+            curl -s -X DELETE "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY"
+          fi
