@@ -1,0 +1,198 @@
+name: ABVPS Desktop Node
+
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: 'ABVPS username'
+        required: true
+        type: string
+      os:
+        description: 'OS to install (ubuntu | kali | alpine)'
+        required: true
+        default: 'ubuntu'
+        type: choice
+        options: [ubuntu, kali, alpine]
+
+jobs:
+  launch-desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Node dependencies
+        run: npm install ws
+
+      - name: Install cloudflared
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb
+
+      # ── Install display server ─────────────────────────────
+      - name: Setup virtual display (Xvfb)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb x11vnc xdotool dbus-x11 pulseaudio
+
+          # Start virtual framebuffer display
+          Xvfb :1 -screen 0 1280x720x24 &
+          export DISPLAY=:1
+          echo "DISPLAY=:1" >> $GITHUB_ENV
+          sleep 2
+
+      # ── Install chosen OS environment in Docker ────────────
+      - name: Install OS desktop environment
+        env:
+          OS_CHOICE: ${{ github.event.inputs.os }}
+        run: |
+          export DISPLAY=:1
+
+          if [ "$OS_CHOICE" = "ubuntu" ]; then
+            echo "Installing Ubuntu XFCE desktop..."
+            sudo apt-get install -y --no-install-recommends \
+              xfce4 xfce4-terminal xfce4-taskmanager thunar \
+              mousepad firefox gedit \
+              xfce4-whiskermenu-plugin xfce4-panel \
+              adwaita-icon-theme papirus-icon-theme 2>/dev/null || true
+
+          elif [ "$OS_CHOICE" = "kali" ]; then
+            echo "Installing Kali tools + XFCE..."
+            # Add Kali repo for tools
+            sudo apt-get install -y --no-install-recommends \
+              xfce4 xfce4-terminal xfce4-taskmanager thunar mousepad \
+              nmap wireshark-gtk metasploit-framework \
+              sqlmap hydra john aircrack-ng \
+              xfce4-whiskermenu-plugin 2>/dev/null || true
+
+          elif [ "$OS_CHOICE" = "alpine" ]; then
+            echo "Installing Alpine-style minimal XFCE..."
+            sudo apt-get install -y --no-install-recommends \
+              xfce4 xfce4-terminal thunar mousepad \
+              xfce4-whiskermenu-plugin 2>/dev/null || true
+          fi
+
+          # Start XFCE session
+          startxfce4 &
+          sleep 5
+          echo "Desktop started."
+
+      # ── Setup VNC + websockify ─────────────────────────────
+      - name: Start VNC server + websockify
+        run: |
+          export DISPLAY=:1
+
+          # Install websockify (bridges VNC to WebSocket for noVNC)
+          pip3 install websockify --break-system-packages 2>/dev/null || pip install websockify
+
+          # Set VNC password
+          mkdir -p ~/.vnc
+          x11vnc -storepasswd abvps ~/.vnc/passwd
+
+          # Start x11vnc on port 5900
+          x11vnc -display :1 -rfbauth ~/.vnc/passwd -rfbport 5900 \
+                 -forever -shared -noxdamage -noxfixes \
+                 -o /tmp/x11vnc.log &
+          sleep 3
+
+          # Start websockify: bridges :6080 (WebSocket) → :5900 (VNC)
+          websockify --daemon --web /dev/null 6080 localhost:5900
+          sleep 2
+          echo "VNC + websockify running."
+          cat /tmp/x11vnc.log | tail -5
+
+      # ── Start ABVPS server.js (file manager + Telegram) ───
+      - name: Start ABVPS server.js on port 8080
+        env:
+          VPS_USER:        ${{ github.event.inputs.username }}
+          TG_BOT_TOKEN:    ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:      ${{ secrets.TG_CHAT_ID }}
+          DB_PROXY_SECRET: ${{ secrets.DB_PROXY_SECRET }}
+          PORT:            8080
+          DISPLAY:         ":1"
+        run: |
+          nohup node server.js > /tmp/abvps.log 2>&1 &
+          sleep 4
+          echo "=== server.js boot ==="
+          cat /tmp/abvps.log
+
+      # ── Open cloudflared tunnel for websockify (port 6080) ─
+      - name: Open tunnel for noVNC (port 6080) & push link
+        env:
+          GH_TOKEN:   ${{ secrets.VPS_DISK_TOKEN }}
+          USERNAME:   ${{ github.event.inputs.username }}
+          TG_TOKEN:   ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT:    ${{ secrets.TG_CHAT_ID }}
+          OS_CHOICE:  ${{ github.event.inputs.os }}
+        run: |
+          # Tunnel websockify port 6080 (noVNC WebSocket)
+          cloudflared tunnel --url http://localhost:6080 > /tmp/cf_vnc.txt 2>&1 &
+
+          LINK=""
+          for i in $(seq 1 50); do
+            LINK=$(grep -oP 'https://[a-z0-9\-]+\.trycloudflare\.com' /tmp/cf_vnc.txt 2>/dev/null | head -1)
+            [ -n "$LINK" ] && break
+            sleep 1
+          done
+
+          if [ -z "$LINK" ]; then
+            echo "ERROR: No VNC tunnel URL"; cat /tmp/cf_vnc.txt; exit 1
+          fi
+          echo "VNC Tunnel: $LINK"
+
+          # Push to vps-disk tunnel/username.txt
+          FILE_PATH="tunnel/${USERNAME}.txt"
+          API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
+          CONTENT=$(echo -n "$LINK" | base64 -w 0)
+
+          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" "$API_URL")
+          SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha',''))" 2>/dev/null || true)
+
+          if [ -n "$SHA" ]; then
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'Update tunnel ${USERNAME}','content':'${CONTENT}','sha':'${SHA}'}))")
+          else
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'New tunnel ${USERNAME}','content':'${CONTENT}'}))")
+          fi
+
+          curl -s -X PUT "$API_URL" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "User-Agent: ABVPS" \
+            -H "Content-Type: application/json" \
+            -d "$BODY"
+
+          # Notify Telegram
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🖥 <b>${USERNAME}</b> desktop online\\nOS: <code>${OS_CHOICE}</code>\\n${LINK}\",\"parse_mode\":\"HTML\"}" > /dev/null
+
+          echo "Tunnel pushed for ${USERNAME}"
+
+      - name: Keep session alive (55 min)
+        run: sleep 3300
+
+      - name: Cleanup on exit
+        if: always()
+        env:
+          GH_TOKEN:  ${{ secrets.VPS_DISK_TOKEN }}
+          USERNAME:  ${{ github.event.inputs.username }}
+          TG_TOKEN:  ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT:   ${{ secrets.TG_CHAT_ID }}
+        run: |
+          FILE_PATH="tunnel/${USERNAME}.txt"
+          API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
+          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" "$API_URL")
+          SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])" 2>/dev/null || true)
+          if [ -n "$SHA" ]; then
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'Clean tunnel ${USERNAME}','sha':'${SHA}'}))")
+            curl -s -X DELETE "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY"
+          fi
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🔴 <b>${USERNAME}</b> desktop offline. Backup saved.\",\"parse_mode\":\"HTML\"}" > /dev/null
