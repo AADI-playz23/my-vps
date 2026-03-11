@@ -8,16 +8,21 @@ on:
         required: true
         type: string
       os:
-        description: 'OS to install (ubuntu | kali | alpine)'
+        description: 'OS to install'
         required: true
         default: 'ubuntu'
         type: choice
         options: [ubuntu, kali, alpine]
+      plan:
+        description: 'User plan'
+        required: true
+        default: 'free'
+        type: string
 
 jobs:
   launch-desktop:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 360  # Runs for up to 6 hours
 
     steps:
       - name: Checkout repo
@@ -41,7 +46,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y xvfb x11vnc xdotool dbus-x11 pulseaudio
 
-          # Start virtual display
           Xvfb :1 -screen 0 1280x720x24 &
           export DISPLAY=:1
           echo "DISPLAY=:1" >> $GITHUB_ENV
@@ -54,7 +58,6 @@ jobs:
           export DISPLAY=:1
 
           if [ "$OS_CHOICE" = "ubuntu" ]; then
-            echo "Installing Ubuntu XFCE desktop..."
             sudo apt-get install -y --no-install-recommends \
               xfce4 xfce4-terminal xfce4-taskmanager thunar \
               mousepad firefox gedit \
@@ -62,7 +65,6 @@ jobs:
               adwaita-icon-theme papirus-icon-theme 2>/dev/null || true
 
           elif [ "$OS_CHOICE" = "kali" ]; then
-            echo "Installing Kali tools + XFCE..."
             sudo apt-get install -y --no-install-recommends \
               xfce4 xfce4-terminal xfce4-taskmanager thunar mousepad \
               nmap wireshark-gtk metasploit-framework \
@@ -70,45 +72,36 @@ jobs:
               xfce4-whiskermenu-plugin 2>/dev/null || true
 
           elif [ "$OS_CHOICE" = "alpine" ]; then
-            echo "Installing Alpine-style minimal XFCE..."
             sudo apt-get install -y --no-install-recommends \
               xfce4 xfce4-terminal thunar mousepad \
               xfce4-whiskermenu-plugin 2>/dev/null || true
           fi
 
-          # Start session
           startxfce4 &
           sleep 5
-          echo "Desktop started."
 
       - name: Start VNC server + websockify
         run: |
           export DISPLAY=:1
 
           pip3 install websockify --break-system-packages 2>/dev/null || pip install websockify
-
-          # Get the web viewer files
           git clone https://github.com/novnc/noVNC.git /opt/novnc
 
-          # Set password
           mkdir -p ~/.vnc
           x11vnc -storepasswd abvps ~/.vnc/passwd
 
-          # Start VNC
           x11vnc -display :1 -rfbauth ~/.vnc/passwd -rfbport 5900 \
                  -forever -shared -noxdamage -noxfixes \
                  -o /tmp/x11vnc.log &
           sleep 3
 
-          # Connect web viewer to VNC
           websockify --daemon --web /opt/novnc 6080 localhost:5900
           sleep 2
-          echo "VNC + websockify running."
-          cat /tmp/x11vnc.log | tail -5
 
       - name: Start ABVPS server.js on port 8080
         env:
           VPS_USER:        ${{ github.event.inputs.username }}
+          PLAN:            ${{ github.event.inputs.plan }}
           TG_BOT_TOKEN:    ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID:      ${{ secrets.TG_CHAT_ID }}
           DB_PROXY_SECRET: ${{ secrets.DB_PROXY_SECRET }}
@@ -117,8 +110,6 @@ jobs:
         run: |
           nohup node server.js > /tmp/abvps.log 2>&1 &
           sleep 4
-          echo "=== server.js boot ==="
-          cat /tmp/abvps.log
 
       - name: Open tunnel for noVNC (port 6080) & push link
         env:
@@ -140,7 +131,6 @@ jobs:
           if [ -z "$LINK" ]; then
             echo "ERROR: No VNC tunnel URL"; cat /tmp/cf_vnc.txt; exit 1
           fi
-          echo "VNC Tunnel: $LINK"
 
           FILE_PATH="tunnel/${USERNAME}.txt"
           API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
@@ -155,20 +145,14 @@ jobs:
             BODY=$(python3 -c "import json; print(json.dumps({'message':'New tunnel ${USERNAME}','content':'${CONTENT}'}))")
           fi
 
-          curl -s -X PUT "$API_URL" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "User-Agent: ABVPS" \
-            -H "Content-Type: application/json" \
-            -d "$BODY"
+          curl -s -X PUT "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY"
 
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🖥 <b>${USERNAME}</b> desktop online\\nOS: <code>${OS_CHOICE}</code>\\n${LINK}\",\"parse_mode\":\"HTML\"}" > /dev/null
+            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🖥 <b>${USERNAME}</b> online\\nOS: <code>${OS_CHOICE}</code>\\n${LINK}\",\"parse_mode\":\"HTML\"}" > /dev/null
 
-          echo "Tunnel pushed for ${USERNAME}"
-
-      - name: Keep session alive (55 min)
-        run: sleep 3300
+      - name: Keep session alive
+        run: sleep 21500
 
       - name: Cleanup on exit
         if: always()
@@ -188,4 +172,4 @@ jobs:
           fi
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🔴 <b>${USERNAME}</b> desktop offline. Backup saved.\",\"parse_mode\":\"HTML\"}" > /dev/null
+            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🔴 <b>${USERNAME}</b> went offline.\",\"parse_mode\":\"HTML\"}" > /dev/null
