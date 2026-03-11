@@ -45,17 +45,20 @@ jobs:
           OS_CHOICE: ${{ github.event.inputs.os }}
           USERNAME: ${{ github.event.inputs.username }}
         run: |
-          # Create user storage folder so Windows can attach it
+          # Create user storage folder 
           mkdir -p /home/runner/abvps-workspace/$USERNAME
 
-          if [ "$OS_CHOICE" = "win10" ] || [ "$OS_CHOICE" = "win11" ]; then
-            echo "Starting Windows Environment..."
-            VERSION="11"
-            if [ "$OS_CHOICE" = "win10" ]; then VERSION="10"; fi
+          # ── TEST ENVIRONMENT: TRUE WINDOWS 10 (Using Tiny10) ──
+          if [ "$OS_CHOICE" = "win10" ]; then
+            echo "Starting Windows 10 Virtual Machine..."
             
-            # Start pre-setup Windows. It mounts the user folder as a hard drive.
-            docker run -d --name windows_node -e VERSION=$VERSION \
-              -p 8006:8006 --device=/dev/kvm --cap-add NET_ADMIN \
+            # Uses dockurr/windows with Tiny10 to minimize lag as much as possible
+            docker run -d --name windows_node \
+              -e VERSION="tiny10" \
+              -e RAM_SIZE="5G" \
+              -e CPU_CORES="2" \
+              -p 8006:8006 \
+              --cap-add NET_ADMIN \
               -v /home/runner/abvps-workspace/$USERNAME:/storage \
               dockurr/windows
             
@@ -63,8 +66,9 @@ jobs:
             echo "VNC_PORT=8006" >> $GITHUB_ENV
             sleep 10
             
+          # ── PRODUCTION ENVIRONMENTS: LINUX & WIN 11 CLONE ──
           else
-            echo "Starting Linux Environment..."
+            echo "Starting Native Core Environment..."
             sudo apt-get update -qq
             sudo apt-get install -y xvfb x11vnc xdotool dbus-x11 pulseaudio
 
@@ -75,15 +79,30 @@ jobs:
 
             if [ "$OS_CHOICE" = "ubuntu" ]; then
               sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad firefox
+            
             elif [ "$OS_CHOICE" = "kali" ]; then
               sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad nmap sqlmap hydra
+            
             elif [ "$OS_CHOICE" = "alpine" ]; then
               sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad
+            
+            elif [ "$OS_CHOICE" = "win11" ]; then
+              echo "Initializing Windows 11 Clone (Native Linux + Wine)..."
+              # Enable 32-bit architecture for Windows app compatibility
+              sudo dpkg --add-architecture i386
+              sudo apt-get update -qq
+              
+              # Install native desktop PLUS Wine (allows running .exe files)
+              sudo apt-get install -y --no-install-recommends \
+                xfce4 xfce4-terminal thunar mousepad firefox \
+                wine64 wine32
             fi
 
+            # Start the desktop interface
             startxfce4 &
             sleep 5
 
+            # Setup noVNC web viewer
             pip3 install websockify --break-system-packages 2>/dev/null || pip install websockify
             git clone https://github.com/novnc/noVNC.git /opt/novnc
             mkdir -p ~/.vnc
@@ -92,7 +111,7 @@ jobs:
             x11vnc -display :1 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -noxdamage -noxfixes &
             websockify --daemon --web /opt/novnc 6080 localhost:5900
             
-            # Linux web viewer runs on 6080
+            # Set the port for Cloudflare to tunnel
             echo "VNC_PORT=6080" >> $GITHUB_ENV
           fi
 
@@ -157,7 +176,6 @@ jobs:
               -H "Accept: application/vnd.github.v3+json" \
               -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"$USERNAME\",\"os\":\"$OS_CHOICE\",\"plan\":\"$PLAN\"}}"
               
-            # Wait 60 seconds to make sure files sync before old machine shuts off
             sleep 60
           fi
           
