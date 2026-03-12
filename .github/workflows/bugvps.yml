@@ -55,11 +55,9 @@ jobs:
           if [ "$OS_CHOICE" = "win10" ] || [ "$OS_CHOICE" = "win11" ]; then
             echo "Starting Real Windows Virtual Machine..."
             
-            # Set version based on what the user clicked in the dashboard
             WIN_VER="11"
             if [ "$OS_CHOICE" = "win10" ]; then WIN_VER="tiny10"; fi
 
-            # Docker container automatically exposes High-Speed RDP on port 3389
             docker run -d --name windows_node \
               -e VERSION="$WIN_VER" -e RAM_SIZE="5G" -e CPU_CORES="2" \
               -e USERNAME="runner" -e PASSWORD="abvps" \
@@ -70,7 +68,6 @@ jobs:
             
           else
             echo "Starting Native Core Environment..."
-            # Install XRDP for native Linux environments to match Windows speeds
             sudo apt-get install -y --no-install-recommends xrdp
             
             if [ "$OS_CHOICE" = "ubuntu" ]; then
@@ -81,7 +78,6 @@ jobs:
               sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad
             fi
 
-            # Set password for RDP auto-login
             echo "runner:abvps" | sudo chpasswd
             echo "xfce4-session" > /home/runner/.xsession
             sudo systemctl restart xrdp
@@ -112,19 +108,19 @@ jobs:
           user-mapping: /etc/guacamole/user-mapping.xml
           EOF
 
-          sudo mkdir -p /usr/share/tomcat9/.guacamole
-          sudo ln -sf /etc/guacamole/guacamole.properties /usr/share/tomcat9/.guacamole/
+          # FIXED DIRECTORY: Tomcat9 looks in /var/lib/tomcat9
+          sudo mkdir -p /var/lib/tomcat9/.guacamole
+          sudo ln -sf /etc/guacamole/guacamole.properties /var/lib/tomcat9/.guacamole/
 
           wget -qO guacamole.war "https://dlcdn.apache.org/guacamole/1.5.4/binary/guacamole-1.5.4.war"
           sudo mv guacamole.war /var/lib/tomcat9/webapps/guacamole.war
           sudo systemctl restart guacd tomcat9
 
-          # ── 4. Nginx Reverse Proxy (Routes Port 80 to APIs) ──
+          # ── 4. Nginx Reverse Proxy ──
           cat << 'EOF' | sudo tee /etc/nginx/sites-available/default
           server {
               listen 80;
               
-              # Route Desktop to Tomcat (Guacamole)
               location /guacamole/ {
                   proxy_pass http://localhost:8080/guacamole/;
                   proxy_buffering off;
@@ -134,7 +130,6 @@ jobs:
                   proxy_set_header Connection $http_connection;
               }
 
-              # Route Node.js APIs & Websocket
               location / {
                   proxy_pass http://localhost:8081/;
                   proxy_http_version 1.1;
@@ -145,8 +140,6 @@ jobs:
           }
           EOF
           sudo systemctl restart nginx
-          
-          # We tell Cloudflared to expose our Nginx router on port 80
           echo "VNC_PORT=80" >> $GITHUB_ENV
 
       - name: Start ABVPS Backend
@@ -201,7 +194,7 @@ jobs:
           sleep 20700
 
           if [ "$PLAN" != "free" ]; then
-            echo "Relay sequence initiated. Igniting next runner."
+            echo "Relay sequence initiated."
             curl -X POST https://api.github.com/repos/AADI-playz23/my-vps/actions/workflows/bugvps.yml/dispatches \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
@@ -209,7 +202,7 @@ jobs:
             sleep 60
           fi
           
-          echo "Time limit reached. Shutting down."
+          echo "Time limit reached."
 
       - name: Cleanup on exit
         if: always()
