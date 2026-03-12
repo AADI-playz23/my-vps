@@ -98,20 +98,20 @@ jobs:
           user-mapping: /etc/guacamole/user-mapping.xml
           EOF
 
-          sudo chmod -R 755 /etc/guacamole
-          sudo chown -R tomcat9:tomcat9 /etc/guacamole
+          # FIXED: Universal permissions, completely removing the buggy 'chown' commands
+          sudo chmod -R 777 /etc/guacamole
 
           sudo mkdir -p /var/lib/tomcat9/.guacamole
           sudo ln -sf /etc/guacamole/guacamole.properties /var/lib/tomcat9/.guacamole/guacamole.properties
           sudo ln -sf /etc/guacamole/user-mapping.xml /var/lib/tomcat9/.guacamole/user-mapping.xml
-          sudo chown -h tomcat9:tomcat9 /var/lib/tomcat9/.guacamole/guacamole.properties
-          sudo chown -h tomcat9:tomcat9 /var/lib/tomcat9/.guacamole/user-mapping.xml
+          
           sudo bash -c 'echo "GUACAMOLE_HOME=/etc/guacamole" >> /etc/default/tomcat9'
 
-          wget -q -O /tmp/guacamole.war \
-            "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
+          wget -q -O /tmp/guacamole.war "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
           sudo cp /tmp/guacamole.war /var/lib/tomcat9/webapps/guacamole.war
-          sudo chown tomcat9:tomcat9 /var/lib/tomcat9/webapps/guacamole.war
+          
+          # FIXED: Universal permissions for the web app too
+          sudo chmod 777 /var/lib/tomcat9/webapps/guacamole.war
 
           sudo systemctl restart guacd
           sudo systemctl restart tomcat9
@@ -212,7 +212,7 @@ jobs:
 
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🖥 <b>${USERNAME}</b> online\\nOS: <code>${OS_CHOICE}</code>\\n${LINK}/guacamole/\",\"parse_mode\":\"HTML\"}" > /dev/null || true
+            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🖥 <b>${USERNAME}</b> online\nOS: <code>${OS_CHOICE}</code>\n${LINK}/guacamole/\",\"parse_mode\":\"HTML\"}" > /dev/null || true
 
       - name: Wait and Relay Handoff
         env:
