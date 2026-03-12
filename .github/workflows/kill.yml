@@ -1,47 +1,34 @@
-name: Kill VPS Session
+name: ABVPS Kill Node
 
 on:
   workflow_dispatch:
     inputs:
       username:
-        description: 'Username whose session should be killed'
+        description: 'ABVPS username to kill'
         required: true
         type: string
 
 jobs:
-  kill-session:
-    runs-on: ubuntu-latest
-
+  kill:
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      # ── Delete session file from vps-disk ──
-      - name: Delete session link from storage
+      - name: Delete tunnel file
         env:
           GH_TOKEN: ${{ secrets.VPS_DISK_TOKEN }}
           USERNAME: ${{ github.event.inputs.username }}
         run: |
           FILE_PATH="tunnel/${USERNAME}.txt"
           API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
-
-          # Get SHA of existing file
-          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
-                              -H "User-Agent: BugVPS-Actions" \
-                              "$API_URL")
+          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" "$API_URL" || true)
           SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])" 2>/dev/null || true)
-
           if [ -n "$SHA" ]; then
-            BODY=$(python3 -c "import json; print(json.dumps({'message':'Kill session for $USERNAME','sha':'$SHA'}))")
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'Kill node','sha':'${SHA}'}))")
             curl -s -X DELETE "$API_URL" \
               -H "Authorization: Bearer $GH_TOKEN" \
-              -H "User-Agent: BugVPS-Actions" \
+              -H "User-Agent: ABVPS" \
               -H "Content-Type: application/json" \
-              -d "$BODY"
-            echo "Session file deleted."
+              -d "$BODY" || true
+            echo "Tunnel file deleted for $USERNAME"
           else
-            echo "No session file found for $USERNAME — nothing to delete."
+            echo "No tunnel file found for $USERNAME"
           fi
-
-      - name: Done
-        run: echo "Kill complete for ${{ github.event.inputs.username }}"
