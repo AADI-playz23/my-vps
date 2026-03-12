@@ -55,7 +55,6 @@ jobs:
           if [ "$OS_CHOICE" = "win10" ] || [ "$OS_CHOICE" = "win11" ]; then
             echo "Starting Lightweight Windows Virtual Machine..."
             
-            # Use Tiny11 and Tiny10 to eliminate bloatware, save RAM, and boost speed!
             WIN_VER="tiny11"
             VM_RAM="4G"
             
@@ -116,7 +115,8 @@ jobs:
 
           echo "GUACAMOLE_HOME=/etc/guacamole" | sudo tee -a /etc/default/tomcat9
           
-          sudo chown -R tomcat9:tomcat9 /etc/guacamole
+          # FIXED: Universal permissions so Tomcat never gets locked out of its own configs
+          sudo chmod -R 777 /etc/guacamole
           
           sudo mkdir -p /usr/share/tomcat9/.guacamole /var/lib/tomcat9/.guacamole
           sudo ln -sf /etc/guacamole/guacamole.properties /usr/share/tomcat9/.guacamole/
