@@ -40,76 +40,114 @@ jobs:
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared-linux-amd64.deb
 
-      - name: Setup Display or Windows
+      - name: Setup RDP Engine & Guacamole Gateway
         env:
           OS_CHOICE: ${{ github.event.inputs.os }}
           USERNAME: ${{ github.event.inputs.username }}
         run: |
-          # Create user storage folder 
           mkdir -p /home/runner/abvps-workspace/$USERNAME
 
-          # ── TEST ENVIRONMENT: TRUE WINDOWS 10 (Using Tiny10) ──
-          if [ "$OS_CHOICE" = "win10" ]; then
-            echo "Starting Windows 10 Virtual Machine..."
+          # ── 1. Install Core Gateway Services ──
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nginx guacd tomcat9 wget unzip
+
+          # ── 2. OS Setup (Real Windows VM vs Native Linux) ──
+          if [ "$OS_CHOICE" = "win10" ] || [ "$OS_CHOICE" = "win11" ]; then
+            echo "Starting Real Windows Virtual Machine..."
             
+            # Set version based on what the user clicked in the dashboard
+            WIN_VER="11"
+            if [ "$OS_CHOICE" = "win10" ]; then WIN_VER="tiny10"; fi
+
+            # Docker container automatically exposes High-Speed RDP on port 3389
             docker run -d --name windows_node \
-              -e VERSION="tiny10" \
-              -e RAM_SIZE="5G" \
-              -e CPU_CORES="2" \
-              -p 8006:8006 \
-              --cap-add NET_ADMIN \
+              -e VERSION="$WIN_VER" -e RAM_SIZE="5G" -e CPU_CORES="2" \
+              -e USERNAME="runner" -e PASSWORD="abvps" \
+              -p 3389:3389 --cap-add NET_ADMIN \
               -v /home/runner/abvps-workspace/$USERNAME:/storage \
               dockurr/windows
-            
-            echo "VNC_PORT=8006" >> $GITHUB_ENV
             sleep 10
             
-          # ── PRODUCTION ENVIRONMENTS: LINUX & WIN 11 CLONE ──
           else
             echo "Starting Native Core Environment..."
-            sudo apt-get update -qq
-            sudo apt-get install -y xvfb x11vnc xdotool dbus-x11 pulseaudio
-
-            Xvfb :1 -screen 0 1280x720x24 &
-            export DISPLAY=:1
-            echo "DISPLAY=:1" >> $GITHUB_ENV
-            sleep 2
-
+            # Install XRDP for native Linux environments to match Windows speeds
+            sudo apt-get install -y --no-install-recommends xrdp
+            
             if [ "$OS_CHOICE" = "ubuntu" ]; then
               sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad firefox
-            
             elif [ "$OS_CHOICE" = "kali" ]; then
               sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad nmap sqlmap hydra
-            
             elif [ "$OS_CHOICE" = "alpine" ]; then
               sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad
-            
-            elif [ "$OS_CHOICE" = "win11" ]; then
-              echo "Initializing Windows 11 Clone (Native Linux + Wine)..."
-              sudo dpkg --add-architecture i386
-              sudo apt-get update -qq
-              sudo apt-get install -y --no-install-recommends \
-                xfce4 xfce4-terminal thunar mousepad firefox \
-                wine64 wine32
             fi
 
-            # Start the desktop interface
-            startxfce4 &
-            sleep 5
-
-            # Setup noVNC web viewer (FIXED: Downloaded to home directory instead of locked /opt)
-            pip3 install websockify --break-system-packages 2>/dev/null || pip install websockify
-            git clone https://github.com/novnc/noVNC.git /home/runner/novnc
-            mkdir -p ~/.vnc
-            x11vnc -storepasswd abvps ~/.vnc/passwd
-
-            x11vnc -display :1 -rfbauth ~/.vnc/passwd -rfbport 5900 -forever -shared -noxdamage -noxfixes &
-            
-            # Start websockify using the unlocked folder
-            websockify --daemon --web /home/runner/novnc 6080 localhost:5900
-            
-            echo "VNC_PORT=6080" >> $GITHUB_ENV
+            # Set password for RDP auto-login
+            echo "runner:abvps" | sudo chpasswd
+            echo "xfce4-session" > /home/runner/.xsession
+            sudo systemctl restart xrdp
           fi
+
+          # ── 3. Guacamole Configuration ──
+          sudo mkdir -p /etc/guacamole
+          cat << 'EOF' | sudo tee /etc/guacamole/user-mapping.xml
+          <user-mapping>
+              <authorize username="abvps" password="abvps">
+                  <connection name="desktop">
+                      <protocol>rdp</protocol>
+                      <param name="hostname">localhost</param>
+                      <param name="port">3389</param>
+                      <param name="username">runner</param>
+                      <param name="password">abvps</param>
+                      <param name="security">any</param>
+                      <param name="ignore-cert">true</param>
+                      <param name="resize-method">display-update</param>
+                  </connection>
+              </authorize>
+          </user-mapping>
+          EOF
+
+          cat << 'EOF' | sudo tee /etc/guacamole/guacamole.properties
+          guacd-hostname: localhost
+          guacd-port: 4822
+          user-mapping: /etc/guacamole/user-mapping.xml
+          EOF
+
+          sudo mkdir -p /usr/share/tomcat9/.guacamole
+          sudo ln -sf /etc/guacamole/guacamole.properties /usr/share/tomcat9/.guacamole/
+
+          wget -qO guacamole.war "https://dlcdn.apache.org/guacamole/1.5.4/binary/guacamole-1.5.4.war"
+          sudo mv guacamole.war /var/lib/tomcat9/webapps/guacamole.war
+          sudo systemctl restart guacd tomcat9
+
+          # ── 4. Nginx Reverse Proxy (Routes Port 80 to APIs) ──
+          cat << 'EOF' | sudo tee /etc/nginx/sites-available/default
+          server {
+              listen 80;
+              
+              # Route Desktop to Tomcat (Guacamole)
+              location /guacamole/ {
+                  proxy_pass http://localhost:8080/guacamole/;
+                  proxy_buffering off;
+                  proxy_http_version 1.1;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection $http_connection;
+              }
+
+              # Route Node.js APIs & Websocket
+              location / {
+                  proxy_pass http://localhost:8081/;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection "upgrade";
+                  proxy_set_header Host $host;
+              }
+          }
+          EOF
+          sudo systemctl restart nginx
+          
+          # We tell Cloudflared to expose our Nginx router on port 80
+          echo "VNC_PORT=80" >> $GITHUB_ENV
 
       - name: Start ABVPS Backend
         env:
@@ -118,7 +156,7 @@ jobs:
           TG_BOT_TOKEN:    ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID:      ${{ secrets.TG_CHAT_ID }}
           DB_PROXY_SECRET: ${{ secrets.DB_PROXY_SECRET }}
-          PORT:            8080
+          PORT:            8081 
         run: |
           nohup node server.js > /tmp/abvps.log 2>&1 &
           sleep 4
