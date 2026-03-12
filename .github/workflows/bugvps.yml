@@ -1,149 +1,147 @@
 name: ABVPS Desktop Node
-run-name: "ABVPS Desktop: ${{ inputs.os }} for ${{ inputs.username }}"
-
 on:
   workflow_dispatch:
     inputs:
       username:
-        description: 'ABVPS username'
+        description: 'Username'
         required: true
         type: string
       os:
-        description: 'OS to install'
+        description: 'OS'
         required: true
         default: 'ubuntu'
-        type: choice
-        options:
-          - ubuntu
-          - kali
-          - alpine
-          - fedora
-          - arch
-          - android
-          - chromeos
-          - lineage
+        type: string
       plan:
-        description: 'User plan'
+        description: 'Plan'
         required: true
         default: 'free'
         type: string
-
 jobs:
-  launch-desktop:
+  run:
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Install Dependencies
+      - name: npm install
+        run: npm install ws
+      - name: install bore
         run: |
-          npm install ws
-          curl -sL https://github.com | tar xz
+          curl -sL https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz | tar xz
+          chmod +x bore
           sudo mv bore /usr/local/bin/bore
-
-      - name: Setup Desktop Environment
+      - name: setup desktop
         env:
-          OS_CHOICE: ${{ inputs.os }}
-          USERNAME: ${{ inputs.username }}
+          OS_CHOICE: ${{ github.event.inputs.os }}
+          USERNAME: ${{ github.event.inputs.username }}
         run: |
+          mkdir -p /home/runner/abvps-workspace/$USERNAME
           sudo apt-get update -qq
-          sudo apt-get install -y nginx guacd tomcat9 wget curl netcat-openbsd xrdp
-          
-          # Install Desktop Components
-          sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad firefox
-          
-          if [[ "$OS_CHOICE" == "kali" ]]; then
-            sudo apt-get install -y nmap sqlmap hydra john aircrack-ng
-          elif [[ "$OS_CHOICE" == "android" || "$OS_CHOICE" == "lineage" ]]; then
-            IMG="redroid/redroid:12.0.0-latest"
-            [ "$OS_CHOICE" == "lineage" ] && IMG="redroid/redroid:11.0.0-latest"
-            docker run -d --name android_node --privileged -p 5900:5900 $IMG androidboot.use_memfd=true || true
-          fi
-
+          sudo apt-get install -y nginx guacd tomcat9 wget curl netcat-openbsd xrdp xfce4 xfce4-terminal thunar mousepad
+          if [ "$OS_CHOICE" = "ubuntu" ]; then sudo apt-get install -y --no-install-recommends firefox; fi
+          if [ "$OS_CHOICE" = "kali" ]; then sudo apt-get install -y --no-install-recommends nmap sqlmap hydra john aircrack-ng; fi
           echo "runner:abvps" | sudo chpasswd
           echo "xfce4-session" | sudo tee /home/runner/.xsession
+          sudo chmod 755 /home/runner/.xsession
           sudo systemctl enable xrdp
           sudo systemctl restart xrdp
-
-          # Configure Guacamole
-          sudo mkdir -p /etc/guacamole /var/lib/tomcat9/.guacamole
-          sudo tee /etc/guacamole/user-mapping.xml > /dev/null << 'EOF'
-<user-mapping>
-    <authorize username="abvps" password="abvps">
-        <connection name="desktop">
-            <protocol>rdp</protocol>
-            <param name="hostname">localhost</param>
-            <param name="port">3389</param>
-            <param name="username">runner</param>
-            <param name="password">abvps</param>
-            <param name="security">any</param>
-            <param name="ignore-cert">true</param>
-        </connection>
-    </authorize>
-</user-mapping>
-EOF
+          for i in $(seq 1 30); do nc -z localhost 3389 2>/dev/null && echo "xrdp ready" && break; sleep 2; done
+          sudo mkdir -p /etc/guacamole
+          printf '%s\n' '<user-mapping>' '  <authorize username="abvps" password="abvps">' '    <connection name="desktop">' '      <protocol>rdp</protocol>' '      <param name="hostname">localhost</param>' '      <param name="port">3389</param>' '      <param name="username">runner</param>' '      <param name="password">abvps</param>' '      <param name="security">any</param>' '      <param name="ignore-cert">true</param>' '      <param name="resize-method">display-update</param>' '    </connection>' '  </authorize>' '</user-mapping>' | sudo tee /etc/guacamole/user-mapping.xml
+          printf '%s\n' 'guacd-hostname: localhost' 'guacd-port: 4822' 'user-mapping: /etc/guacamole/user-mapping.xml' | sudo tee /etc/guacamole/guacamole.properties
+          sudo chmod -R 777 /etc/guacamole
+          sudo mkdir -p /var/lib/tomcat9/.guacamole
+          sudo ln -sf /etc/guacamole/guacamole.properties /var/lib/tomcat9/.guacamole/guacamole.properties
+          sudo ln -sf /etc/guacamole/user-mapping.xml /var/lib/tomcat9/.guacamole/user-mapping.xml
           sudo bash -c 'echo "GUACAMOLE_HOME=/etc/guacamole" >> /etc/default/tomcat9'
-          wget -q -O /tmp/guacamole.war "https://archive.apache.org"
+          wget -q -O /tmp/guacamole.war "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
           sudo cp /tmp/guacamole.war /var/lib/tomcat9/webapps/guacamole.war
-          sudo systemctl restart guacd tomcat9
-
-          # Configure Nginx
-          sudo tee /etc/nginx/sites-available/default > /dev/null << 'EOF'
-server {
-    listen 80;
-    location / { return 302 /guacamole/; }
-    location /guacamole/ {
-        proxy_pass http://127.0.0.1;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-    }
-}
-EOF
-          sudo systemctl restart nginx
-
-      - name: Start Tunnel and Push Link
+          sudo chmod 777 /var/lib/tomcat9/webapps/guacamole.war
+          sudo systemctl restart guacd
+          sudo systemctl restart tomcat9
+          for i in $(seq 1 60); do
+            S=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/guacamole/ || echo "000")
+            echo "guac check $i: $S"
+            if [ "$S" = "200" ] || [ "$S" = "302" ]; then echo "guacamole ready"; break; fi
+            sleep 5
+          done
+          printf '%s\n' 'server {' '  listen 80;' '  location /guacamole/ {' '    proxy_pass http://127.0.0.1:8080/guacamole/;' '    proxy_buffering off;' '    proxy_http_version 1.1;' '    proxy_set_header Upgrade $http_upgrade;' '    proxy_set_header Connection "upgrade";' '    proxy_set_header Host $host;' '    proxy_read_timeout 3600s;' '  }' '  location = / { return 302 /guacamole/; }' '  location /abvps/ {' '    proxy_pass http://127.0.0.1:8081/;' '    proxy_http_version 1.1;' '    proxy_set_header Upgrade $http_upgrade;' '    proxy_set_header Connection "upgrade";' '    proxy_set_header Host $host;' '    proxy_read_timeout 3600s;' '  }' '}' | sudo tee /etc/nginx/sites-available/default
+          sudo nginx -t && sudo systemctl restart nginx
+      - name: start backend
+        env:
+          VPS_USER: ${{ github.event.inputs.username }}
+          PLAN: ${{ github.event.inputs.plan }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          DB_PROXY_SECRET: ${{ secrets.DB_PROXY_SECRET }}
+          PORT: 8081
+        run: |
+          nohup node server.js > /tmp/abvps.log 2>&1 &
+          sleep 4
+          cat /tmp/abvps.log
+      - name: open tunnel
         env:
           GH_TOKEN: ${{ secrets.VPS_DISK_TOKEN }}
-          USERNAME: ${{ inputs.username }}
+          USERNAME: ${{ github.event.inputs.username }}
+          TG_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT_ID }}
+          OS_CHOICE: ${{ github.event.inputs.os }}
         run: |
-          # Start Bore tunnel
+          for i in $(seq 1 60); do
+            S=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/ || echo "000")
+            if [ "$S" = "200" ] || [ "$S" = "302" ]; then echo "port 80 ready"; break; fi
+            sleep 5
+          done
           bore local 80 --to bore.pub > /tmp/bore.txt 2>&1 &
-          
-          # Extract port
-          for i in {1..20}; do
-            BORE_PORT=$(grep -oP 'listening at bore\.pub:\K[0-9]+' /tmp/bore.txt || true)
+          BORE_PORT=""
+          for i in $(seq 1 30); do
+            BORE_PORT=$(grep -oP 'listening at bore\.pub:\K[0-9]+' /tmp/bore.txt 2>/dev/null | head -1 || true)
             [ -n "$BORE_PORT" ] && break
             sleep 2
           done
-
+          if [ -z "$BORE_PORT" ]; then echo "bore failed"; cat /tmp/bore.txt; exit 1; fi
           LINK="http://bore.pub:${BORE_PORT}"
-          echo "Public Link: $LINK"
-
-          # Push link to vps-disk repo
+          echo "link: $LINK"
           FILE_PATH="tunnel/${USERNAME}.txt"
-          API_URL="https://api.github.com{FILE_PATH}"
+          API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
           CONTENT=$(echo -n "$LINK" | base64 -w 0)
-          
-          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
-          SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha',''))" 2>/dev/null || echo "")
-
+          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" "$API_URL" || true)
+          SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha',''))" 2>/dev/null || true)
           if [ -n "$SHA" ]; then
-            BODY=$(python3 -c "import json; print(json.dumps({'message':'Update tunnel','content':'$CONTENT','sha':'$SHA'}))")
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'update','content':'${CONTENT}','sha':'${SHA}'}))")
           else
-            BODY=$(python3 -c "import json; print(json.dumps({'message':'Create tunnel','content':'$CONTENT'}))")
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'new','content':'${CONTENT}'}))")
           fi
-
-          curl -X PUT -H "Authorization: Bearer $GH_TOKEN" \
-               -H "Content-Type: application/json" \
-               -d "$BODY" "$API_URL"
-          
-          # Keep alive
-          sleep 21600
+          curl -s -X PUT "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY"
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" -H "Content-Type: application/json" -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"online: ${USERNAME} os: ${OS_CHOICE} ${LINK}/guacamole/\"}" > /dev/null || true
+      - name: wait
+        env:
+          GH_TOKEN: ${{ secrets.VPS_DISK_TOKEN }}
+          USERNAME: ${{ github.event.inputs.username }}
+          OS_CHOICE: ${{ github.event.inputs.os }}
+          PLAN: ${{ github.event.inputs.plan }}
+        run: |
+          sleep 20700
+          if [ "$PLAN" != "free" ]; then
+            curl -s -X POST https://api.github.com/repos/AADI-playz23/my-vps/actions/workflows/bugvps.yml/dispatches -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"$USERNAME\",\"os\":\"$OS_CHOICE\",\"plan\":\"$PLAN\"}}" || true
+            sleep 60
+          fi
+      - name: cleanup
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.VPS_DISK_TOKEN }}
+          USERNAME: ${{ github.event.inputs.username }}
+          TG_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          FILE_PATH="tunnel/${USERNAME}.txt"
+          API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
+          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" "$API_URL" || true)
+          SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])" 2>/dev/null || true)
+          if [ -n "$SHA" ]; then
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'clean','sha':'${SHA}'}))")
+            curl -s -X DELETE "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY" || true
+          fi
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" -H "Content-Type: application/json" -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"offline: ${USERNAME}\"}" > /dev/null || true
