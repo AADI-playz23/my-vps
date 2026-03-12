@@ -46,16 +46,26 @@ jobs:
           USERNAME: ${{ github.event.inputs.username }}
         run: |
           mkdir -p /home/runner/abvps-workspace/$USERNAME
+
+          # ── 1. Install Core Gateway Services ──
           sudo apt-get update -qq
           sudo apt-get install -y nginx guacd tomcat9 wget unzip
 
+          # ── 2. OS Setup (Tiny Windows VM vs Native Linux) ──
           if [ "$OS_CHOICE" = "win10" ] || [ "$OS_CHOICE" = "win11" ]; then
-            echo "Starting Real Windows Virtual Machine..."
-            WIN_VER="11"
-            if [ "$OS_CHOICE" = "win10" ]; then WIN_VER="tiny10"; fi
+            echo "Starting Lightweight Windows Virtual Machine..."
+            
+            # Use Tiny11 and Tiny10 to eliminate bloatware, save RAM, and boost speed!
+            WIN_VER="tiny11"
+            VM_RAM="4G"
+            
+            if [ "$OS_CHOICE" = "win10" ]; then 
+              WIN_VER="tiny10"
+              VM_RAM="3G"
+            fi
 
             docker run -d --name windows_node \
-              -e VERSION="$WIN_VER" -e RAM_SIZE="5G" -e CPU_CORES="2" \
+              -e VERSION="$WIN_VER" -e RAM_SIZE="$VM_RAM" -e CPU_CORES="2" \
               -e USERNAME="runner" -e PASSWORD="abvps" \
               -p 3389:3389 --cap-add NET_ADMIN \
               -v /home/runner/abvps-workspace/$USERNAME:/storage \
@@ -79,6 +89,7 @@ jobs:
             sudo systemctl restart xrdp
           fi
 
+          # ── 3. Guacamole Configuration ──
           sudo mkdir -p /etc/guacamole
           cat << 'EOF' | sudo tee /etc/guacamole/user-mapping.xml
           <user-mapping>
@@ -104,12 +115,20 @@ jobs:
           EOF
 
           echo "GUACAMOLE_HOME=/etc/guacamole" | sudo tee -a /etc/default/tomcat9
+          
+          sudo chown -R tomcat9:tomcat9 /etc/guacamole
+          
+          sudo mkdir -p /usr/share/tomcat9/.guacamole /var/lib/tomcat9/.guacamole
+          sudo ln -sf /etc/guacamole/guacamole.properties /usr/share/tomcat9/.guacamole/
+          sudo ln -sf /etc/guacamole/guacamole.properties /var/lib/tomcat9/.guacamole/
+
           wget -qO guacamole.war "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
           sudo mv guacamole.war /var/lib/tomcat9/webapps/guacamole.war
           
-          sudo chown -R tomcat:tomcat /etc/guacamole || true
           sudo systemctl restart guacd tomcat9
+          sleep 10
 
+          # ── 4. Nginx Reverse Proxy ──
           cat << 'EOF' | sudo tee /etc/nginx/sites-available/default
           server {
               listen 80;
