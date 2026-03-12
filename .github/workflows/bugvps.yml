@@ -35,10 +35,12 @@ jobs:
       - name: Install Node dependencies
         run: npm install ws
 
-      - name: Install cloudflared
+      - name: Install bore
         run: |
-          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-          sudo dpkg -i cloudflared-linux-amd64.deb
+          curl -sL https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz | tar xz
+          chmod +x bore
+          sudo mv bore /usr/local/bin/bore
+          bore --version
 
       - name: Setup Desktop Environment
         env:
@@ -47,11 +49,9 @@ jobs:
         run: |
           mkdir -p /home/runner/abvps-workspace/$USERNAME
 
-          # Core packages always needed (xrdp removed from here so it doesn't block Windows!)
           sudo apt-get update -qq
           sudo apt-get install -y nginx guacd tomcat9 wget curl netcat-openbsd
 
-          # OS-specific desktop
           if [ "$OS_CHOICE" = "win10" ] || [ "$OS_CHOICE" = "win11" ]; then
             echo "Starting Windows container..."
 
@@ -75,7 +75,6 @@ jobs:
 
             echo "Waiting for Windows RDP (up to 15 min)..."
             for i in $(seq 1 90); do
-              # Safely wrapped in an IF statement so it cannot crash the script
               if nc -z localhost 3389 2>/dev/null; then
                 echo "✓ RDP port 3389 open after ${i} attempts"
                 break
@@ -86,7 +85,6 @@ jobs:
 
           else
             echo "Starting native Linux desktop..."
-            # xrdp is now ONLY installed for Linux!
             sudo apt-get install -y xrdp
 
             if [ "$OS_CHOICE" = "ubuntu" ]; then
@@ -109,53 +107,49 @@ jobs:
 
             echo "Waiting for xrdp on port 3389..."
             for i in $(seq 1 30); do
-              # Safely wrapped in an IF statement so it cannot crash the script
               if nc -z localhost 3389 2>/dev/null; then
-                echo "xrdp ready"
-                break
+                echo "xrdp ready"; break
               fi
               sleep 2
             done
           fi
 
-          # Guacamole setup
           sudo mkdir -p /etc/guacamole
 
           sudo tee /etc/guacamole/user-mapping.xml > /dev/null << 'EOF'
-          <user-mapping>
-              <authorize username="abvps" password="abvps">
-                  <connection name="desktop">
-                      <protocol>rdp</protocol>
-                      <param name="hostname">localhost</param>
-                      <param name="port">3389</param>
-                      <param name="username">runner</param>
-                      <param name="password">abvps</param>
-                      <param name="security">any</param>
-                      <param name="ignore-cert">true</param>
-                      <param name="resize-method">display-update</param>
-                      <param name="enable-wallpaper">true</param>
-                      <param name="enable-font-smoothing">true</param>
-                  </connection>
-              </authorize>
-          </user-mapping>
-          EOF
+<user-mapping>
+    <authorize username="abvps" password="abvps">
+        <connection name="desktop">
+            <protocol>rdp</protocol>
+            <param name="hostname">localhost</param>
+            <param name="port">3389</param>
+            <param name="username">runner</param>
+            <param name="password">abvps</param>
+            <param name="security">any</param>
+            <param name="ignore-cert">true</param>
+            <param name="resize-method">display-update</param>
+            <param name="enable-wallpaper">true</param>
+            <param name="enable-font-smoothing">true</param>
+        </connection>
+    </authorize>
+</user-mapping>
+EOF
 
           sudo tee /etc/guacamole/guacamole.properties > /dev/null << 'EOF'
-          guacd-hostname: localhost
-          guacd-port: 4822
-          user-mapping: /etc/guacamole/user-mapping.xml
-          EOF
+guacd-hostname: localhost
+guacd-port: 4822
+user-mapping: /etc/guacamole/user-mapping.xml
+EOF
 
-          # Universal read/write avoids the 'invalid user' crash entirely
           sudo chmod -R 777 /etc/guacamole
 
           sudo mkdir -p /var/lib/tomcat9/.guacamole
           sudo ln -sf /etc/guacamole/guacamole.properties /var/lib/tomcat9/.guacamole/guacamole.properties
           sudo ln -sf /etc/guacamole/user-mapping.xml /var/lib/tomcat9/.guacamole/user-mapping.xml
-          
           sudo bash -c 'echo "GUACAMOLE_HOME=/etc/guacamole" >> /etc/default/tomcat9'
 
-          wget -q -O /tmp/guacamole.war "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
+          wget -q -O /tmp/guacamole.war \
+            "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
           sudo cp /tmp/guacamole.war /var/lib/tomcat9/webapps/guacamole.war
           sudo chmod 777 /var/lib/tomcat9/webapps/guacamole.war
 
@@ -164,7 +158,6 @@ jobs:
 
           echo "Waiting for Guacamole to deploy..."
           for i in $(seq 1 60); do
-            # FIXED: || echo "000" stops curl from throwing Exit Code 7 and crashing GitHub!
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/guacamole/ || echo "000")
             echo "  attempt $i — HTTP $STATUS"
             if [ "$STATUS" = "200" ] || [ "$STATUS" = "302" ]; then
@@ -175,37 +168,38 @@ jobs:
           done
 
           sudo tee /etc/nginx/sites-available/default > /dev/null << 'EOF'
-          server {
-              listen 80;
+server {
+    listen 80;
 
-              location /guacamole/ {
-                  proxy_pass         http://127.0.0.1:8080/guacamole/;
-                  proxy_buffering    off;
-                  proxy_http_version 1.1;
-                  proxy_set_header   Upgrade     $http_upgrade;
-                  proxy_set_header   Connection  "upgrade";
-                  proxy_set_header   Host        $host;
-                  proxy_read_timeout 3600s;
-                  proxy_send_timeout 3600s;
-              }
+    location /guacamole/ {
+        proxy_pass         http://127.0.0.1:8080/guacamole/;
+        proxy_buffering    off;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade     $http_upgrade;
+        proxy_set_header   Connection  "upgrade";
+        proxy_set_header   Host        $host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
 
-              location = / {
-                  return 302 /guacamole/;
-              }
+    location = / {
+        return 302 /guacamole/;
+    }
 
-              location /abvps/ {
-                  proxy_pass         http://127.0.0.1:8081/;
-                  proxy_http_version 1.1;
-                  proxy_set_header   Upgrade    $http_upgrade;
-                  proxy_set_header   Connection "upgrade";
-                  proxy_set_header   Host       $host;
-                  proxy_read_timeout 3600s;
-                  proxy_send_timeout 3600s;
-              }
-          }
-          EOF
+    location /abvps/ {
+        proxy_pass         http://127.0.0.1:8081/;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade    $http_upgrade;
+        proxy_set_header   Connection "upgrade";
+        proxy_set_header   Host       $host;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+EOF
 
           sudo nginx -t && sudo systemctl restart nginx
+          echo "nginx ready"
 
       - name: Start ABVPS Backend
         env:
@@ -220,7 +214,7 @@ jobs:
           sleep 4
           cat /tmp/abvps.log
 
-      - name: Open tunnel & push link
+      - name: Open bore tunnel & push link
         env:
           GH_TOKEN:  ${{ secrets.VPS_DISK_TOKEN }}
           USERNAME:  ${{ github.event.inputs.username }}
@@ -228,24 +222,40 @@ jobs:
           TG_CHAT:   ${{ secrets.TG_CHAT_ID }}
           OS_CHOICE: ${{ github.event.inputs.os }}
         run: |
-          cloudflared tunnel --url http://localhost:80 > /tmp/cf.txt 2>&1 &
-
-          LINK=""
-          for i in $(seq 1 50); do
-            LINK=$(grep -oP 'https://[a-z0-9\-]+\.trycloudflare\.com' /tmp/cf.txt 2>/dev/null | head -1 || true)
-            if [ -n "$LINK" ]; then
+          # Final readiness check on port 80
+          echo "Waiting for port 80 to be ready..."
+          for i in $(seq 1 60); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/ || echo "000")
+            echo "  port 80 check $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "302" ]; then
+              echo "✓ Port 80 ready — opening bore tunnel"
               break
             fi
+            sleep 5
+          done
+
+          # Start bore tunnel on port 80
+          bore local 80 --to bore.pub > /tmp/bore.txt 2>&1 &
+
+          # Extract bore port
+          BORE_PORT=""
+          for i in $(seq 1 30); do
+            BORE_PORT=$(grep -oP 'listening at bore\.pub:\K[0-9]+' /tmp/bore.txt 2>/dev/null | head -1 || true)
+            [ -n "$BORE_PORT" ] && break
+            echo "  waiting for bore port... attempt $i"
             sleep 2
           done
 
-          if [ -z "$LINK" ]; then
-            cat /tmp/cf.txt
+          if [ -z "$BORE_PORT" ]; then
+            echo "ERROR: bore failed to start"
+            cat /tmp/bore.txt
             exit 1
           fi
 
-          echo "Tunnel: $LINK"
+          LINK="http://bore.pub:${BORE_PORT}"
+          echo "✓ Bore tunnel: $LINK"
 
+          # Push to vps-disk
           FILE_PATH="tunnel/${USERNAME}.txt"
           API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
           CONTENT=$(echo -n "$LINK" | base64 -w 0)
