@@ -20,7 +20,7 @@ on:
 
 jobs:
   launch-desktop:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 360
 
     steps:
