@@ -52,23 +52,70 @@ jobs:
           sudo apt-get install -y nginx guacd tomcat9 wget curl netcat-openbsd xrdp
 
           # OS-specific desktop
-          if [ "$OS_CHOICE" = "kali" ]; then
-            sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad nmap sqlmap hydra john aircrack-ng
+          if [ "$OS_CHOICE" = "win10" ] || [ "$OS_CHOICE" = "win11" ]; then
+            echo "Starting Windows container..."
+
+            WIN_VER="tiny11"
+            VM_RAM="4G"
+            if [ "$OS_CHOICE" = "win10" ]; then
+              WIN_VER="tiny10"
+              VM_RAM="3G"
+            fi
+
+            docker run -d --name windows_node \
+              -e VERSION="$WIN_VER" \
+              -e RAM_SIZE="$VM_RAM" \
+              -e CPU_CORES="2" \
+              -e USERNAME="runner" \
+              -e PASSWORD="abvps" \
+              -p 3389:3389 \
+              --cap-add NET_ADMIN \
+              -v /home/runner/abvps-workspace/$USERNAME:/storage \
+              dockurr/windows
+
+            echo "Waiting for Windows RDP (up to 15 min)..."
+            for i in $(seq 1 90); do
+              # Safely wrapped in an IF statement so it cannot crash the script
+              if nc -z localhost 3389 2>/dev/null; then
+                echo "✓ RDP port 3389 open after ${i} attempts"
+                break
+              fi
+              echo "  attempt $i/90 — waiting 10s..."
+              sleep 10
+            done
+
           else
-            sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad firefox
+            echo "Starting native Linux desktop..."
+            sudo apt-get install -y xrdp
+
+            if [ "$OS_CHOICE" = "ubuntu" ]; then
+              sudo apt-get install -y --no-install-recommends \
+                xfce4 xfce4-terminal thunar mousepad firefox
+            elif [ "$OS_CHOICE" = "kali" ]; then
+              sudo apt-get install -y --no-install-recommends \
+                xfce4 xfce4-terminal thunar mousepad \
+                nmap sqlmap hydra john aircrack-ng
+            elif [ "$OS_CHOICE" = "alpine" ]; then
+              sudo apt-get install -y --no-install-recommends \
+                xfce4 xfce4-terminal thunar mousepad
+            fi
+
+            echo "runner:abvps" | sudo chpasswd
+            echo "xfce4-session" | sudo tee /home/runner/.xsession
+            sudo chmod 755 /home/runner/.xsession
+            sudo systemctl enable xrdp
+            sudo systemctl restart xrdp
+
+            echo "Waiting for xrdp on port 3389..."
+            for i in $(seq 1 30); do
+              # Safely wrapped in an IF statement so it cannot crash the script
+              if nc -z localhost 3389 2>/dev/null; then
+                echo "xrdp ready"
+                break
+              fi
+              sleep 2
+            done
           fi
-
-          echo "runner:abvps" | sudo chpasswd
-          echo "xfce4-session" | sudo tee /home/runner/.xsession
-          sudo chmod 755 /home/runner/.xsession
-          sudo systemctl enable xrdp
-          sudo systemctl restart xrdp
-
-          echo "Waiting for xrdp..."
-          for i in $(seq 1 30); do
-            nc -z localhost 3389 2>/dev/null && echo "xrdp ready" && break
-            sleep 2
-          done
 
           # Guacamole setup
           sudo mkdir -p /etc/guacamole
@@ -98,7 +145,7 @@ jobs:
           user-mapping: /etc/guacamole/user-mapping.xml
           EOF
 
-          # FIXED: Universal permissions, completely removing the buggy 'chown' commands
+          # Universal read/write avoids the 'invalid user' crash entirely
           sudo chmod -R 777 /etc/guacamole
 
           sudo mkdir -p /var/lib/tomcat9/.guacamole
@@ -109,8 +156,6 @@ jobs:
 
           wget -q -O /tmp/guacamole.war "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
           sudo cp /tmp/guacamole.war /var/lib/tomcat9/webapps/guacamole.war
-          
-          # FIXED: Universal permissions for the web app too
           sudo chmod 777 /var/lib/tomcat9/webapps/guacamole.war
 
           sudo systemctl restart guacd
@@ -118,9 +163,13 @@ jobs:
 
           echo "Waiting for Guacamole to deploy..."
           for i in $(seq 1 60); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/guacamole/)
+            # FIXED: || echo "000" stops curl from throwing Exit Code 7 and crashing GitHub!
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/guacamole/ || echo "000")
             echo "  attempt $i — HTTP $STATUS"
-            [ "$STATUS" = "200" ] || [ "$STATUS" = "302" ] && echo "Guacamole UP" && break
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "302" ]; then
+              echo "✓ Guacamole UP"
+              break
+            fi
             sleep 5
           done
 
@@ -183,11 +232,16 @@ jobs:
           LINK=""
           for i in $(seq 1 50); do
             LINK=$(grep -oP 'https://[a-z0-9\-]+\.trycloudflare\.com' /tmp/cf.txt 2>/dev/null | head -1 || true)
-            [ -n "$LINK" ] && break
+            if [ -n "$LINK" ]; then
+              break
+            fi
             sleep 2
           done
 
-          [ -z "$LINK" ] && cat /tmp/cf.txt && exit 1
+          if [ -z "$LINK" ]; then
+            cat /tmp/cf.txt
+            exit 1
+          fi
 
           echo "Tunnel: $LINK"
 
