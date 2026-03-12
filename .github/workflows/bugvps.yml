@@ -1,109 +1,78 @@
-name: ⚡ ABVPS High-Performance Node
+name: ABVPS Cloud Engine
 
 on:
   workflow_dispatch:
     inputs:
       username:
-        description: 'Target User'
         required: true
       os:
-        description: 'Environment (ubuntu, alpine, win10, win11)'
         required: true
 
 jobs:
-  deploy:
+  run-os:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 
+    timeout-minutes: 360
 
     steps:
-      - name: 🚀 Initialize Environment
+      - name: Get Files
         uses: actions/checkout@v4
 
-      - name: 🛠️ Install Core Gateway (Guacamole + Bore)
+      - name: Install Tunnel Tools
         run: |
           sudo apt-get update -qq
-          
-          # Dynamic Tomcat Versioning to fix Exit Code 100
-          if apt-cache show tomcat10 > /dev/null 2>&1; then
-             echo "Detected Ubuntu 24.04+ - Installing Tomcat 10"
-             sudo apt-get install -y nginx guacd tomcat10 wget curl jq
-          else
-             echo "Detected Ubuntu 22.04 or older - Installing Tomcat 9"
-             sudo apt-get install -y nginx guacd tomcat9 wget curl jq
-          fi
-          
-          # Fast-Binary install for Bore Tunnel
+          sudo apt-get install -y jq curl
           curl -sL https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz | tar xz
           sudo mv bore /usr/local/bin/bore
-          echo "✅ Gateway components installed."
 
-      - name: 🖥️ Provision OS Desktop
+      - name: Start OS
         env:
-          OS_TYPE: ${{ github.event.inputs.os }}
+          OS_CHOICE: ${{ github.event.inputs.os }}
         run: |
-          if [[ "$OS_TYPE" == *"win"* ]]; then
-            echo "🪟 Booting Windows Virtual Engine..."
-            # Optimized Windows image for GitHub Runners
-            docker run -d --name vps_node -p 3389:3389 --cap-add NET_ADMIN --device /dev/kvm dockurr/windows
-          else
-            echo "🐧 Booting Linux XFCE Desktop..."
-            sudo apt-get install -y xfce4 xfce4-terminal thunar xfce4-goodies
-            # Set default password for Guacamole login
-            echo "runner:abvps" | sudo chpasswd
+          if [ "$OS_CHOICE" == "cli" ]; then
+            docker run -d --name os_node -p 80:7681 tsl0922/ttyd bash
+            
+          elif [ "$OS_CHOICE" == "android" ]; then
+            docker run -d --privileged --name os_node -p 80:6080 -e DEVICE="Samsung Galaxy S10" -e WEB_VNC=true budtmo/docker-android:emulator_11.0
+            
+          elif [ "$OS_CHOICE" == "kali" ]; then
+            docker run -d --name os_node -p 80:3000 lscr.io/linuxserver/webtop:kali
+            
+          elif [ "$OS_CHOICE" == "arch" ]; then
+            docker run -d --name os_node -p 80:3000 lscr.io/linuxserver/webtop:arch
+            
+          elif [ "$OS_CHOICE" == "fedora" ]; then
+            docker run -d --name os_node -p 80:3000 lscr.io/linuxserver/webtop:fedora
           fi
 
-      - name: 🌐 Establish Bore Tunnel & API Sync
+      - name: Start Tunnel and Save Link
         env:
           GH_TOKEN: ${{ secrets.VPS_DISK_TOKEN }}
           USER_ID: ${{ github.event.inputs.username }}
         run: |
-          echo "📡 Starting Tunnel..."
-          # Tunneling Port 80 for Nginx/Guacamole
           nohup bore local 80 --to bore.pub > /tmp/bore.log 2>&1 &
           
-          # Smart-polling for random port assignment
           for i in {1..15}; do
             BORE_PORT=$(grep -oP 'listening at bore\.pub:\K[0-9]+' /tmp/bore.log | head -1)
             [ -n "$BORE_PORT" ] && break
-            echo "Waiting for port assignment ($i/15)..."
             sleep 3
           done
 
-          if [ -z "$BORE_PORT" ]; then
-            echo "❌ Tunnel failure. Check bore.pub status."
-            cat /tmp/bore.log && exit 1
-          fi
-
+          if [ -z "$BORE_PORT" ]; then exit 1; fi
           FINAL_URL="http://bore.pub:$BORE_PORT"
-          echo "🔗 URL Generated: $FINAL_URL"
 
-          # ⚡ HIGH-SPEED API HANDSHAKE
-          # Syncing link to vps-disk repo for dashboard pickup
           FILE_PATH="tunnel/${USER_ID}.txt"
           B64_CONTENT=$(echo -n "$FINAL_URL" | base64 -w 0)
           
-          # Fetch existing SHA if file exists to allow updates
-          SHA=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/AADI-playz23/vps-disk/contents/$FILE_PATH" | jq -r '.sha // empty')
+          SHA=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/AADI-playz23/vps-disk/contents/$FILE_PATH" | jq -r '.sha // empty')
 
-          # Construct dynamic JSON for API
           if [ -n "$SHA" ]; then
-            JSON_DATA=$(jq -n --arg msg "Update: $USER_ID" --arg content "$B64_CONTENT" --arg sha "$SHA" \
-              '{message: $msg, content: $content, sha: $sha}')
+            JSON_DATA=$(jq -n --arg msg "Update" --arg content "$B64_CONTENT" --arg sha "$SHA" '{message: $msg, content: $content, sha: $sha}')
           else
-            JSON_DATA=$(jq -n --arg msg "New: $USER_ID" --arg content "$B64_CONTENT" \
-              '{message: $msg, content: $content}')
+            JSON_DATA=$(jq -n --arg msg "New" --arg content "$B64_CONTENT" '{message: $msg, content: $content}')
           fi
 
           curl -s -X PUT "https://api.github.com/repos/AADI-playz23/vps-disk/contents/$FILE_PATH" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$JSON_DATA"
-          
-          echo "🚀 Link synced. Node is online."
+            -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d "$JSON_DATA"
 
-      - name: 🛡️ Maintain Session
-        run: |
-          echo "✅ Runner Active. Keeping node alive for 6 hours..."
-          # Keeps the runner spinning so the VM doesn't shut down
-          sleep 21600
+      - name: Keep Alive
+        run: sleep 21600
