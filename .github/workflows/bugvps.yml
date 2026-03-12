@@ -49,13 +49,13 @@ jobs:
 
       - name: Setup Desktop Environment
         env:
-          OS_CHOICE: ${{ github.event.inputs.os }}
-          USERNAME: ${{ github.event.inputs.username }}
+          OS_CHOICE: ${{ inputs.os }}
+          USERNAME: ${{ inputs.username }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y nginx guacd tomcat9 wget curl netcat-openbsd xrdp
           
-          # Install Desktop Components based on OS choice
+          # Install Desktop Components
           sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad firefox
           
           if [[ "$OS_CHOICE" == "kali" ]]; then
@@ -93,7 +93,7 @@ EOF
           sudo cp /tmp/guacamole.war /var/lib/tomcat9/webapps/guacamole.war
           sudo systemctl restart guacd tomcat9
 
-          # Configure Nginx Reverse Proxy
+          # Configure Nginx
           sudo tee /etc/nginx/sites-available/default > /dev/null << 'EOF'
 server {
     listen 80;
@@ -112,7 +112,7 @@ EOF
       - name: Start Tunnel and Push Link
         env:
           GH_TOKEN: ${{ secrets.VPS_DISK_TOKEN }}
-          USERNAME: ${{ github.event.inputs.username }}
+          USERNAME: ${{ inputs.username }}
         run: |
           # Start Bore tunnel
           bore local 80 --to bore.pub > /tmp/bore.txt 2>&1 &
@@ -127,7 +127,7 @@ EOF
           LINK="http://bore.pub:${BORE_PORT}"
           echo "Public Link: $LINK"
 
-          # Prepare JSON to push link to vps-disk repo
+          # Push link to vps-disk repo
           FILE_PATH="tunnel/${USERNAME}.txt"
           API_URL="https://api.github.com{FILE_PATH}"
           CONTENT=$(echo -n "$LINK" | base64 -w 0)
@@ -136,12 +136,14 @@ EOF
           SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha',''))" 2>/dev/null || echo "")
 
           if [ -n "$SHA" ]; then
-            BODY=$(python3 -c "import json; print(json.dumps({'message':'Update','content':'$CONTENT','sha':'$SHA'}))")
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'Update tunnel','content':'$CONTENT','sha':'$SHA'}))")
           else
-            BODY=$(python3 -c "import json; print(json.dumps({'message':'Create','content':'$CONTENT'}))")
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'Create tunnel','content':'$CONTENT'}))")
           fi
 
-          curl -X PUT -H "Authorization: Bearer $GH_TOKEN" -d "$BODY" "$API_URL"
+          curl -X PUT -H "Authorization: Bearer $GH_TOKEN" \
+               -H "Content-Type: application/json" \
+               -d "$BODY" "$API_URL"
           
-          # Keep alive for 6 hours
+          # Keep alive
           sleep 21600
