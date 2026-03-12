@@ -70,9 +70,8 @@ jobs:
             export DISPLAY=:1
             startxfce4 &
             
-            # Bound exclusively to IPv4
-            x11vnc -display :1 -nopw -listen 127.0.0.1 -xkb -ncache 10 -ncache_cr -forever -q &
-            websockify --daemon --web ~/novnc 8006 127.0.0.1:5900
+            x11vnc -display :1 -nopw -listen localhost -xkb -ncache 10 -ncache_cr -forever -q &
+            websockify --daemon --web ~/novnc 8006 localhost:5900
             
             echo "VNC_PORT=8006" >> $GITHUB_ENV
           fi
@@ -87,18 +86,21 @@ jobs:
           GH_TOKEN:   ${{ secrets.VPS_DISK_TOKEN }}
           USERNAME:   ${{ github.event.inputs.username }}
         run: |
-          # 1. THE HEALTH CHECK: Wait for the local web server to be fully online
-          echo "Waiting for local port $VNC_PORT to come online..."
-          for i in $(seq 1 60); do
-            if curl -s http://127.0.0.1:${VNC_PORT} > /dev/null; then
-              echo "Port $VNC_PORT is active and ready!"
+          # 1. THE STRICT HEALTH CHECK
+          # We force the script to wait until the internal web server returns a perfect HTTP 200/301 code.
+          echo "Waiting for backend to finish installing and turn on the web UI..."
+          for i in $(seq 1 150); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${VNC_PORT})
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "301" ] || [ "$STATUS" = "302" ]; then
+              echo "Server is 100% UP and ready! (HTTP $STATUS)"
               break
             fi
-            sleep 2
+            echo "Attempt $i/150: Backend still downloading/booting (HTTP $STATUS)... Waiting 5s"
+            sleep 5
           done
 
-          # 2. FORCE IPv4: Use 127.0.0.1 to prevent Cloudflare 502 routing bugs
-          cloudflared tunnel --url http://127.0.0.1:${VNC_PORT} > /tmp/cf_vnc.txt 2>&1 &
+          # 2. Open the Cloudflare Tunnel ONLY after the backend is ready
+          cloudflared tunnel --url http://localhost:${VNC_PORT} > /tmp/cf_vnc.txt 2>&1 &
           
           echo "Waiting for Cloudflare link..."
           LINK=""
