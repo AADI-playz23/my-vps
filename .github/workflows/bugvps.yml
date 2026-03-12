@@ -52,7 +52,7 @@ jobs:
               VM_RAM="3G"
             fi
 
-            # Launch Windows and its built-in web viewer on port 8006!
+            # Launch Windows and its built-in web viewer
             docker run -d --name windows_node \
               -e VERSION="$WIN_VER" -e RAM_SIZE="$VM_RAM" -e CPU_CORES="2" \
               -p 8006:8006 --cap-add NET_ADMIN \
@@ -60,17 +60,19 @@ jobs:
             
             echo "VNC_PORT=8006" >> $GITHUB_ENV
           else
-            # Fallback for Linux nodes
+            # Fallback for Linux environments
             sudo apt-get update -qq
-            sudo apt-get install -y python3-pip xvfb x11vnc xfce4 xfce4-terminal
+            sudo apt-get install -y python3-pip xvfb x11vnc xfce4 xfce4-terminal thunar mousepad firefox
             pip3 install websockify --break-system-packages 2>/dev/null || pip install websockify
             git clone https://github.com/novnc/noVNC.git ~/novnc
             
             Xvfb :1 -screen 0 1280x720x24 &
             export DISPLAY=:1
             startxfce4 &
-            x11vnc -display :1 -nopw -listen localhost -xkb -ncache 10 -ncache_cr -forever -q &
-            websockify --daemon --web ~/novnc 8006 localhost:5900
+            
+            # Bound exclusively to IPv4
+            x11vnc -display :1 -nopw -listen 127.0.0.1 -xkb -ncache 10 -ncache_cr -forever -q &
+            websockify --daemon --web ~/novnc 8006 127.0.0.1:5900
             
             echo "VNC_PORT=8006" >> $GITHUB_ENV
           fi
@@ -85,13 +87,30 @@ jobs:
           GH_TOKEN:   ${{ secrets.VPS_DISK_TOKEN }}
           USERNAME:   ${{ github.event.inputs.username }}
         run: |
-          cloudflared tunnel --url http://localhost:${{ env.VNC_PORT }} > /tmp/cf_vnc.txt 2>&1 &
-          sleep 8
+          # 1. THE HEALTH CHECK: Wait for the local web server to be fully online
+          echo "Waiting for local port $VNC_PORT to come online..."
+          for i in $(seq 1 60); do
+            if curl -s http://127.0.0.1:${VNC_PORT} > /dev/null; then
+              echo "Port $VNC_PORT is active and ready!"
+              break
+            fi
+            sleep 2
+          done
+
+          # 2. FORCE IPv4: Use 127.0.0.1 to prevent Cloudflare 502 routing bugs
+          cloudflared tunnel --url http://127.0.0.1:${VNC_PORT} > /tmp/cf_vnc.txt 2>&1 &
           
-          LINK=$(grep -oP 'https://[a-z0-9\-]+\.trycloudflare\.com' /tmp/cf_vnc.txt | head -1)
-          CONTENT=$(echo -n "$LINK" | base64 -w 0)
+          echo "Waiting for Cloudflare link..."
+          LINK=""
+          for i in $(seq 1 50); do
+            LINK=$(grep -oP 'https://[a-z0-9\-]+\.trycloudflare\.com' /tmp/cf_vnc.txt | head -1)
+            [ -n "$LINK" ] && break
+            sleep 2
+          done
+
           FILE_PATH="tunnel/${USERNAME}.txt"
           API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
+          CONTENT=$(echo -n "$LINK" | base64 -w 0)
           
           RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" "$API_URL")
           SHA=$(echo "$RESPONSE" | grep -o '"sha": *"[^"]*"' | cut -d'"' -f4 || true)
