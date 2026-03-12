@@ -145,17 +145,14 @@ EOF
           sudo chmod -R 755 /etc/guacamole
           sudo chown -R tomcat9:tomcat9 /etc/guacamole
 
-          # Symlink GUACAMOLE_HOME for Tomcat
           sudo mkdir -p /var/lib/tomcat9/.guacamole
           sudo ln -sf /etc/guacamole/guacamole.properties /var/lib/tomcat9/.guacamole/guacamole.properties
           sudo ln -sf /etc/guacamole/user-mapping.xml      /var/lib/tomcat9/.guacamole/user-mapping.xml
           sudo chown -h tomcat9:tomcat9 /var/lib/tomcat9/.guacamole/guacamole.properties
           sudo chown -h tomcat9:tomcat9 /var/lib/tomcat9/.guacamole/user-mapping.xml
 
-          # Set GUACAMOLE_HOME env for Tomcat service
           sudo bash -c 'echo "GUACAMOLE_HOME=/etc/guacamole" >> /etc/default/tomcat9'
 
-          # Download + deploy Guacamole WAR
           wget -q -O /tmp/guacamole.war \
             "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
           sudo cp /tmp/guacamole.war /var/lib/tomcat9/webapps/guacamole.war
@@ -164,7 +161,6 @@ EOF
           sudo systemctl restart guacd
           sudo systemctl restart tomcat9
 
-          # ── FIX 1: Wait properly for Tomcat to fully deploy WAR ──
           echo "Waiting for Tomcat to deploy guacamole.war..."
           for i in $(seq 1 60); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/guacamole/)
@@ -176,7 +172,6 @@ EOF
             sleep 5
           done
 
-          # Final check — print status
           echo "=== Guacamole final status ==="
           curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:8080/guacamole/
           echo "=== guacd status ==="
@@ -184,14 +179,10 @@ EOF
           echo "=== tomcat9 status ==="
           sudo systemctl status tomcat9 --no-pager | tail -5
 
-          # ── 4. Nginx reverse proxy ─────────────────────────────
-          # FIX 2: proxy / → Guacamole directly so cloudflare tunnel on :80 works
-          # FIX 3: correct WebSocket upgrade headers
           sudo tee /etc/nginx/sites-available/default > /dev/null << 'EOF'
 server {
     listen 80;
 
-    # ── Guacamole web UI + WebSocket ──
     location /guacamole/ {
         proxy_pass          http://127.0.0.1:8080/guacamole/;
         proxy_buffering     off;
@@ -204,12 +195,10 @@ server {
         proxy_send_timeout  3600s;
     }
 
-    # ── Redirect root → Guacamole login ──
     location = / {
         return 302 /guacamole/;
     }
 
-    # ── server.js WebSocket (quota, file manager, Telegram sync) ──
     location /abvps/ {
         proxy_pass          http://127.0.0.1:8081/;
         proxy_http_version  1.1;
@@ -220,7 +209,6 @@ server {
         proxy_send_timeout  3600s;
     }
 
-    # ── Health check ──
     location = /health {
         proxy_pass http://127.0.0.1:8081/health;
     }
@@ -252,7 +240,6 @@ EOF
           TG_CHAT:    ${{ secrets.TG_CHAT_ID }}
           OS_CHOICE:  ${{ github.event.inputs.os }}
         run: |
-          # Tunnel port 80 (nginx → Guacamole)
           cloudflared tunnel --url http://localhost:80 > /tmp/cf_vnc.txt 2>&1 &
 
           LINK=""
@@ -270,7 +257,6 @@ EOF
 
           echo "Tunnel: $LINK"
 
-          # Push tunnel URL to vps-disk
           FILE_PATH="tunnel/${USERNAME}.txt"
           API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
           CONTENT=$(echo -n "$LINK" | base64 -w 0)
@@ -290,7 +276,6 @@ EOF
             -H "Content-Type: application/json" \
             -d "$BODY"
 
-          # Telegram notification
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🖥 <b>${USERNAME}</b> desktop online\\nOS: <code>${OS_CHOICE}</code>\\n${LINK}/guacamole/\",\"parse_mode\":\"HTML\"}" > /dev/null
