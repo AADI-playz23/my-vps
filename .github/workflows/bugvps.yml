@@ -47,11 +47,11 @@ jobs:
         run: |
           mkdir -p /home/runner/abvps-workspace/$USERNAME
 
-          # ── 1. Core packages ───────────────────────────────────
+          # ── 1. Core packages ──
           sudo apt-get update -qq
           sudo apt-get install -y nginx guacd tomcat9 wget unzip curl
 
-          # ── 2. OS Setup ────────────────────────────────────────
+          # ── 2. OS Setup ──
           if [ "$OS_CHOICE" = "win10" ] || [ "$OS_CHOICE" = "win11" ]; then
             echo "Starting Windows container..."
 
@@ -114,57 +114,52 @@ jobs:
             done
           fi
 
-          # ── 3. Guacamole config ────────────────────────────────
+          # ── 3. Guacamole config ──
           sudo mkdir -p /etc/guacamole
 
           sudo tee /etc/guacamole/user-mapping.xml > /dev/null << 'EOF'
-<user-mapping>
-    <authorize username="abvps" password="abvps">
-        <connection name="desktop">
-            <protocol>rdp</protocol>
-            <param name="hostname">localhost</param>
-            <param name="port">3389</param>
-            <param name="username">runner</param>
-            <param name="password">abvps</param>
-            <param name="security">any</param>
-            <param name="ignore-cert">true</param>
-            <param name="resize-method">display-update</param>
-            <param name="enable-wallpaper">true</param>
-            <param name="enable-font-smoothing">true</param>
-        </connection>
-    </authorize>
-</user-mapping>
-EOF
+          <user-mapping>
+              <authorize username="abvps" password="abvps">
+                  <connection name="desktop">
+                      <protocol>rdp</protocol>
+                      <param name="hostname">localhost</param>
+                      <param name="port">3389</param>
+                      <param name="username">runner</param>
+                      <param name="password">abvps</param>
+                      <param name="security">any</param>
+                      <param name="ignore-cert">true</param>
+                      <param name="resize-method">display-update</param>
+                      <param name="enable-wallpaper">true</param>
+                      <param name="enable-font-smoothing">true</param>
+                  </connection>
+              </authorize>
+          </user-mapping>
+          EOF
 
           sudo tee /etc/guacamole/guacamole.properties > /dev/null << 'EOF'
-guacd-hostname: localhost
-guacd-port: 4822
-user-mapping: /etc/guacamole/user-mapping.xml
-EOF
+          guacd-hostname: localhost
+          guacd-port: 4822
+          user-mapping: /etc/guacamole/user-mapping.xml
+          EOF
 
-          sudo chmod -R 755 /etc/guacamole
+          sudo chmod -R 777 /etc/guacamole
           sudo chown -R tomcat9:tomcat9 /etc/guacamole
 
           sudo mkdir -p /var/lib/tomcat9/.guacamole
           sudo ln -sf /etc/guacamole/guacamole.properties /var/lib/tomcat9/.guacamole/guacamole.properties
           sudo ln -sf /etc/guacamole/user-mapping.xml      /var/lib/tomcat9/.guacamole/user-mapping.xml
-          sudo chown -h tomcat9:tomcat9 /var/lib/tomcat9/.guacamole/guacamole.properties
-          sudo chown -h tomcat9:tomcat9 /var/lib/tomcat9/.guacamole/user-mapping.xml
 
           sudo bash -c 'echo "GUACAMOLE_HOME=/etc/guacamole" >> /etc/default/tomcat9'
 
-          wget -q -O /tmp/guacamole.war \
-            "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
+          wget -q -O /tmp/guacamole.war "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
           sudo cp /tmp/guacamole.war /var/lib/tomcat9/webapps/guacamole.war
           sudo chown tomcat9:tomcat9 /var/lib/tomcat9/webapps/guacamole.war
 
-          sudo systemctl restart guacd
-          sudo systemctl restart tomcat9
+          sudo systemctl restart guacd tomcat9
 
           echo "Waiting for Tomcat to deploy guacamole.war..."
           for i in $(seq 1 60); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/guacamole/)
-            echo "  attempt $i — HTTP $STATUS"
             if [ "$STATUS" = "200" ] || [ "$STATUS" = "302" ]; then
               echo "Guacamole is UP (HTTP $STATUS)"
               break
@@ -172,51 +167,33 @@ EOF
             sleep 5
           done
 
-          echo "=== Guacamole final status ==="
-          curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:8080/guacamole/
-          echo "=== guacd status ==="
-          sudo systemctl status guacd --no-pager | tail -5
-          echo "=== tomcat9 status ==="
-          sudo systemctl status tomcat9 --no-pager | tail -5
-
+          # FIXED: Proper Nginx routing so server.js websockets don't break
           sudo tee /etc/nginx/sites-available/default > /dev/null << 'EOF'
-server {
-    listen 80;
+          server {
+              listen 80;
 
-    location /guacamole/ {
-        proxy_pass          http://127.0.0.1:8080/guacamole/;
-        proxy_buffering     off;
-        proxy_http_version  1.1;
-        proxy_set_header    X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header    Upgrade         $http_upgrade;
-        proxy_set_header    Connection      "upgrade";
-        proxy_set_header    Host            $host;
-        proxy_read_timeout  3600s;
-        proxy_send_timeout  3600s;
-    }
+              location /guacamole/ {
+                  proxy_pass          http://127.0.0.1:8080/guacamole/;
+                  proxy_buffering     off;
+                  proxy_http_version  1.1;
+                  proxy_set_header    X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header    Upgrade         $http_upgrade;
+                  proxy_set_header    Connection      "upgrade";
+                  proxy_set_header    Host            $host;
+              }
 
-    location = / {
-        return 302 /guacamole/;
-    }
-
-    location /abvps/ {
-        proxy_pass          http://127.0.0.1:8081/;
-        proxy_http_version  1.1;
-        proxy_set_header    Upgrade    $http_upgrade;
-        proxy_set_header    Connection "upgrade";
-        proxy_set_header    Host       $host;
-        proxy_read_timeout  3600s;
-        proxy_send_timeout  3600s;
-    }
-
-    location = /health {
-        proxy_pass http://127.0.0.1:8081/health;
-    }
-}
-EOF
+              location / {
+                  proxy_pass          http://127.0.0.1:8081/;
+                  proxy_http_version  1.1;
+                  proxy_set_header    Upgrade         $http_upgrade;
+                  proxy_set_header    Connection      "upgrade";
+                  proxy_set_header    Host            $host;
+              }
+          }
+          EOF
 
           sudo nginx -t && sudo systemctl restart nginx
-          echo "nginx restarted"
+          echo "VNC_PORT=80" >> $GITHUB_ENV
 
       - name: Start ABVPS Backend
         env:
@@ -229,8 +206,6 @@ EOF
         run: |
           nohup node server.js > /tmp/abvps.log 2>&1 &
           sleep 4
-          echo "=== server.js boot log ==="
-          cat /tmp/abvps.log
 
       - name: Open tunnel & push link
         env:
@@ -240,7 +215,7 @@ EOF
           TG_CHAT:    ${{ secrets.TG_CHAT_ID }}
           OS_CHOICE:  ${{ github.event.inputs.os }}
         run: |
-          cloudflared tunnel --url http://localhost:80 > /tmp/cf_vnc.txt 2>&1 &
+          cloudflared tunnel --url http://localhost:${{ env.VNC_PORT }} > /tmp/cf_vnc.txt 2>&1 &
 
           LINK=""
           for i in $(seq 1 50); do
@@ -248,14 +223,6 @@ EOF
             [ -n "$LINK" ] && break
             sleep 1
           done
-
-          if [ -z "$LINK" ]; then
-            echo "ERROR: No tunnel URL found"
-            cat /tmp/cf_vnc.txt
-            exit 1
-          fi
-
-          echo "Tunnel: $LINK"
 
           FILE_PATH="tunnel/${USERNAME}.txt"
           API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
@@ -270,17 +237,12 @@ EOF
             BODY=$(python3 -c "import json; print(json.dumps({'message':'New tunnel','content':'${CONTENT}'}))")
           fi
 
-          curl -s -X PUT "$API_URL" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "User-Agent: ABVPS" \
-            -H "Content-Type: application/json" \
-            -d "$BODY"
+          curl -s -X PUT "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY"
 
+          # Send Telegram Notification
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🖥 <b>${USERNAME}</b> desktop online\\nOS: <code>${OS_CHOICE}</code>\\n${LINK}/guacamole/\",\"parse_mode\":\"HTML\"}" > /dev/null
-
-          echo "Done. Guacamole URL: ${LINK}/guacamole/"
+            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🖥 <b>${USERNAME}</b> desktop online\nOS: <code>${OS_CHOICE}</code>\n${LINK}\",\"parse_mode\":\"HTML\"}" > /dev/null
 
       - name: Wait and Relay Handoff
         env:
@@ -292,16 +254,15 @@ EOF
           sleep 20700
 
           if [ "$PLAN" != "free" ]; then
-            echo "Relay sequence initiated for paid plan..."
-            curl -s -X POST \
-              https://api.github.com/repos/AADI-playz23/my-vps/actions/workflows/bugvps.yml/dispatches \
+            echo "Relay sequence initiated."
+            curl -X POST https://api.github.com/repos/AADI-playz23/my-vps/actions/workflows/bugvps.yml/dispatches \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github.v3+json" \
               -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"$USERNAME\",\"os\":\"$OS_CHOICE\",\"plan\":\"$PLAN\"}}"
             sleep 60
           fi
-
-          echo "Session time limit reached."
+          
+          echo "Time limit reached."
 
       - name: Cleanup on exit
         if: always()
@@ -317,12 +278,10 @@ EOF
           SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])" 2>/dev/null || true)
           if [ -n "$SHA" ]; then
             BODY=$(python3 -c "import json; print(json.dumps({'message':'Clean tunnel','sha':'${SHA}'}))")
-            curl -s -X DELETE "$API_URL" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "User-Agent: ABVPS" \
-              -H "Content-Type: application/json" \
-              -d "$BODY"
+            curl -s -X DELETE "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY"
           fi
+          
+          # Send Telegram Offline Notification
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"🔴 <b>${USERNAME}</b> node offline.\",\"parse_mode\":\"HTML\"}" > /dev/null
