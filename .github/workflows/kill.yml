@@ -1,46 +1,47 @@
-name: Kill ABVPS Node
+name: Kill VPS Session
 
 on:
   workflow_dispatch:
     inputs:
       username:
-        description: 'ABVPS username'
+        description: 'Username whose session should be killed'
         required: true
         type: string
 
 jobs:
-  terminate:
+  kill-session:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Force Close Secure Tunnel
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # ── Delete session file from vps-disk ──
+      - name: Delete session link from storage
         env:
           GH_TOKEN: ${{ secrets.VPS_DISK_TOKEN }}
           USERNAME: ${{ github.event.inputs.username }}
         run: |
           FILE_PATH="tunnel/${USERNAME}.txt"
           API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
-          
-          echo "Attempting to retrieve tunnel SHA for $USERNAME..."
-          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" "$API_URL")
-          SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; data=json.load(sys.stdin); print(data.get('sha', ''))" 2>/dev/null || true)
-          
+
+          # Get SHA of existing file
+          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+                              -H "User-Agent: BugVPS-Actions" \
+                              "$API_URL")
+          SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])" 2>/dev/null || true)
+
           if [ -n "$SHA" ]; then
-            echo "Tunnel found. Issuing delete command..."
-            BODY=$(python3 -c "import json; print(json.dumps({'message':'Force Kill Node ${USERNAME}','sha':'${SHA}'}))")
-            curl -s -X DELETE "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY"
-            echo "Tunnel successfully destroyed."
+            BODY=$(python3 -c "import json; print(json.dumps({'message':'Kill session for $USERNAME','sha':'$SHA'}))")
+            curl -s -X DELETE "$API_URL" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "User-Agent: BugVPS-Actions" \
+              -H "Content-Type: application/json" \
+              -d "$BODY"
+            echo "Session file deleted."
           else
-            echo "Tunnel already offline or not found."
+            echo "No session file found for $USERNAME — nothing to delete."
           fi
 
-      - name: Notify System Alert
-        env:
-          TG_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT: ${{ secrets.TG_CHAT_ID }}
-          USERNAME: ${{ github.event.inputs.username }}
-        run: |
-          if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ]; then
-            curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-              -H "Content-Type: application/json" \
-              -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"⚠️ <b>${USERNAME}</b> issued a force kill command.\",\"parse_mode\":\"HTML\"}" > /dev/null
-          fi
+      - name: Done
+        run: echo "Kill complete for ${{ github.event.inputs.username }}"
