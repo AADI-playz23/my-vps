@@ -47,9 +47,9 @@ jobs:
         run: |
           mkdir -p /home/runner/abvps-workspace/$USERNAME
 
-          # Core packages always needed
+          # Core packages always needed (xrdp removed from here so it doesn't block Windows!)
           sudo apt-get update -qq
-          sudo apt-get install -y nginx guacd tomcat9 wget curl netcat-openbsd xrdp
+          sudo apt-get install -y nginx guacd tomcat9 wget curl netcat-openbsd
 
           # OS-specific desktop
           if [ "$OS_CHOICE" = "win10" ] || [ "$OS_CHOICE" = "win11" ]; then
@@ -86,6 +86,7 @@ jobs:
 
           else
             echo "Starting native Linux desktop..."
+            # xrdp is now ONLY installed for Linux!
             sudo apt-get install -y xrdp
 
             if [ "$OS_CHOICE" = "ubuntu" ]; then
