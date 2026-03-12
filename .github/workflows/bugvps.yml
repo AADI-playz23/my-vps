@@ -1,50 +1,59 @@
-name: ABVPS Cloud Engine
+name: ⚡ ABVPS Linux & Android Engine
 
 on:
   workflow_dispatch:
     inputs:
       username:
+        description: 'Target User'
         required: true
       os:
+        description: 'OS (cli, android, kali, arch, fedora)'
         required: true
 
 jobs:
-  run-os:
+  deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 360 
 
     steps:
-      - name: Get Files
+      - name: 🚀 Initialize Engine
         uses: actions/checkout@v4
 
-      - name: Install Tunnel Tools
+      - name: 🛠️ Setup Bore Tunnel
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y jq curl
+          sudo apt-get install -y curl jq
           curl -sL https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz | tar xz
           sudo mv bore /usr/local/bin/bore
 
-      - name: Start OS
+      - name: 🖥️ Provision OS Container
         env:
-          OS_CHOICE: ${{ github.event.inputs.os }}
+          OS_TYPE: ${{ github.event.inputs.os }}
         run: |
-          if [ "$OS_CHOICE" == "cli" ]; then
-            docker run -d --name os_node -p 80:7681 tsl0922/ttyd bash
+          # We map every container directly to host Port 80 for the tunnel
+          if [ "$OS_TYPE" == "cli" ]; then
+            echo "💻 Booting Terminal..."
+            docker run -d --name vps_node -p 80:7681 tsl0922/ttyd bash
             
-          elif [ "$OS_CHOICE" == "android" ]; then
-            docker run -d --privileged --name os_node -p 80:6080 -e DEVICE="Samsung Galaxy S10" -e WEB_VNC=true budtmo/docker-android:emulator_11.0
+          elif [ "$OS_TYPE" == "android" ]; then
+            echo "📱 Booting Android OS..."
+            docker run -d --privileged --name vps_node -p 80:6080 -e DEVICE="Samsung Galaxy S10" -e WEB_VNC=true budtmo/docker-android:emulator_11.0
+            sleep 15 # Give Android UI time to generate
             
-          elif [ "$OS_CHOICE" == "kali" ]; then
-            docker run -d --name os_node -p 80:3000 lscr.io/linuxserver/webtop:kali
+          elif [ "$OS_TYPE" == "kali" ]; then
+            echo "🐉 Booting Kali Desktop..."
+            docker run -d --name vps_node -p 80:3000 lscr.io/linuxserver/webtop:kali
             
-          elif [ "$OS_CHOICE" == "arch" ]; then
-            docker run -d --name os_node -p 80:3000 lscr.io/linuxserver/webtop:arch
+          elif [ "$OS_TYPE" == "arch" ]; then
+            echo "🦅 Booting Arch Desktop..."
+            docker run -d --name vps_node -p 80:3000 lscr.io/linuxserver/webtop:arch
             
-          elif [ "$OS_CHOICE" == "fedora" ]; then
-            docker run -d --name os_node -p 80:3000 lscr.io/linuxserver/webtop:fedora
+          elif [ "$OS_TYPE" == "fedora" ]; then
+            echo "🎩 Booting Fedora Desktop..."
+            docker run -d --name vps_node -p 80:3000 lscr.io/linuxserver/webtop:fedora
           fi
 
-      - name: Start Tunnel and Save Link
+      - name: 🌐 Establish API Sync
         env:
           GH_TOKEN: ${{ secrets.VPS_DISK_TOKEN }}
           USER_ID: ${{ github.event.inputs.username }}
@@ -74,5 +83,5 @@ jobs:
           curl -s -X PUT "https://api.github.com/repos/AADI-playz23/vps-disk/contents/$FILE_PATH" \
             -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/json" -d "$JSON_DATA"
 
-      - name: Keep Alive
+      - name: 🛡️ Maintain Session
         run: sleep 21600
