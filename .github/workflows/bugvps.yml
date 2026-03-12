@@ -13,7 +13,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Setting a 6-hour timeout for long-running sessions
     timeout-minutes: 360 
 
     steps:
@@ -23,9 +22,17 @@ jobs:
       - name: 🛠️ Install Core Gateway (Guacamole + Bore)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y nginx guacd tomcat9 wget curl jq
           
-          # Binary-direct install for Bore (Fastest method)
+          # Dynamic Tomcat Versioning to fix Exit Code 100
+          if apt-cache show tomcat10 > /dev/null 2>&1; then
+             echo "Detected Ubuntu 24.04+ - Installing Tomcat 10"
+             sudo apt-get install -y nginx guacd tomcat10 wget curl jq
+          else
+             echo "Detected Ubuntu 22.04 or older - Installing Tomcat 9"
+             sudo apt-get install -y nginx guacd tomcat9 wget curl jq
+          fi
+          
+          # Fast-Binary install for Bore Tunnel
           curl -sL https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz | tar xz
           sudo mv bore /usr/local/bin/bore
           echo "✅ Gateway components installed."
@@ -36,13 +43,12 @@ jobs:
         run: |
           if [[ "$OS_TYPE" == *"win"* ]]; then
             echo "🪟 Booting Windows Virtual Engine..."
-            # Dockurr/Windows is optimized for GitHub Runners
+            # Optimized Windows image for GitHub Runners
             docker run -d --name vps_node -p 3389:3389 --cap-add NET_ADMIN --device /dev/kvm dockurr/windows
           else
             echo "🐧 Booting Linux XFCE Desktop..."
-            sudo apt-get install -y xfce4 xfce4-terminal thunar
-            sudo apt-get install -y --no-install-recommends xfce4-goodies
-            # Set default user password for Guacamole access
+            sudo apt-get install -y xfce4 xfce4-terminal thunar xfce4-goodies
+            # Set default password for Guacamole login
             echo "runner:abvps" | sudo chpasswd
           fi
 
@@ -52,19 +58,19 @@ jobs:
           USER_ID: ${{ github.event.inputs.username }}
         run: |
           echo "📡 Starting Tunnel..."
-          # Tunneling Port 80 where Nginx serves the Guacamole Client
+          # Tunneling Port 80 for Nginx/Guacamole
           nohup bore local 80 --to bore.pub > /tmp/bore.log 2>&1 &
           
-          # Smart-polling for the random port assignment
-          for i in {1..10}; do
+          # Smart-polling for random port assignment
+          for i in {1..15}; do
             BORE_PORT=$(grep -oP 'listening at bore\.pub:\K[0-9]+' /tmp/bore.log | head -1)
             [ -n "$BORE_PORT" ] && break
-            echo "Waiting for port assignment..."
-            sleep 2
+            echo "Waiting for port assignment ($i/15)..."
+            sleep 3
           done
 
           if [ -z "$BORE_PORT" ]; then
-            echo "❌ Tunnel failure."
+            echo "❌ Tunnel failure. Check bore.pub status."
             cat /tmp/bore.log && exit 1
           fi
 
@@ -72,26 +78,32 @@ jobs:
           echo "🔗 URL Generated: $FINAL_URL"
 
           # ⚡ HIGH-SPEED API HANDSHAKE
-          # Instead of slow Git commits, we inject the link directly via GitHub API
+          # Syncing link to vps-disk repo for dashboard pickup
           FILE_PATH="tunnel/${USER_ID}.txt"
           B64_CONTENT=$(echo -n "$FINAL_URL" | base64 -w 0)
           
-          # Get SHA if file exists (to overwrite), otherwise create new
+          # Fetch existing SHA if file exists to allow updates
           SHA=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/repos/AADI-playz23/vps-disk/contents/$FILE_PATH" | jq -r '.sha // empty')
 
-          JSON_DATA=$(jq -n --arg msg "Sync: $USER_ID" --arg content "$B64_CONTENT" --arg sha "$SHA" \
-            '{message: $msg, content: $content} + (if $sha != "" then {sha: $sha} else {} end)')
+          # Construct dynamic JSON for API
+          if [ -n "$SHA" ]; then
+            JSON_DATA=$(jq -n --arg msg "Update: $USER_ID" --arg content "$B64_CONTENT" --arg sha "$SHA" \
+              '{message: $msg, content: $content, sha: $sha}')
+          else
+            JSON_DATA=$(jq -n --arg msg "New: $USER_ID" --arg content "$B64_CONTENT" \
+              '{message: $msg, content: $content}')
+          fi
 
           curl -s -X PUT "https://api.github.com/repos/AADI-playz23/vps-disk/contents/$FILE_PATH" \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$JSON_DATA"
           
-          echo "🚀 Link synced to cloud. Dashboard should now redirect."
+          echo "🚀 Link synced. Node is online."
 
       - name: 🛡️ Maintain Session
         run: |
-          echo "✅ Node is fully operational. Keeping runner alive..."
-          # Prevents the job from finishing and killing the VM
+          echo "✅ Runner Active. Keeping node alive for 6 hours..."
+          # Keeps the runner spinning so the VM doesn't shut down
           sleep 21600
