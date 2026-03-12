@@ -48,8 +48,9 @@ jobs:
           mkdir -p /home/runner/abvps-workspace/$USERNAME
 
           # ── 1. Install Core Gateway Services ──
+          # FIXED: Removed --no-install-recommends so Java and Tomcat install completely
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends nginx guacd tomcat9 wget unzip
+          sudo apt-get install -y nginx guacd tomcat9 wget unzip
 
           # ── 2. OS Setup (Real Windows VM vs Native Linux) ──
           if [ "$OS_CHOICE" = "win10" ] || [ "$OS_CHOICE" = "win11" ]; then
@@ -68,7 +69,7 @@ jobs:
             
           else
             echo "Starting Native Core Environment..."
-            sudo apt-get install -y --no-install-recommends xrdp
+            sudo apt-get install -y xrdp
             
             if [ "$OS_CHOICE" = "ubuntu" ]; then
               sudo apt-get install -y --no-install-recommends xfce4 xfce4-terminal thunar mousepad firefox
@@ -108,12 +109,14 @@ jobs:
           user-mapping: /etc/guacamole/user-mapping.xml
           EOF
 
-          # FIXED DIRECTORY: Tomcat9 looks in /var/lib/tomcat9
-          sudo mkdir -p /var/lib/tomcat9/.guacamole
-          sudo ln -sf /etc/guacamole/guacamole.properties /var/lib/tomcat9/.guacamole/
-
-          wget -qO guacamole.war "https://dlcdn.apache.org/guacamole/1.5.4/binary/guacamole-1.5.4.war"
+          # FIXED: Explicitly tell Tomcat where to find the Guacamole configs
+          echo "GUACAMOLE_HOME=/etc/guacamole" | sudo tee -a /etc/default/tomcat9
+          
+          # FIXED: Use Apache's permanent archive link so the download never fails
+          wget -qO guacamole.war "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
           sudo mv guacamole.war /var/lib/tomcat9/webapps/guacamole.war
+          
+          sudo chown -R tomcat:tomcat /etc/guacamole || true
           sudo systemctl restart guacd tomcat9
 
           # ── 4. Nginx Reverse Proxy ──
@@ -208,13 +211,3 @@ jobs:
         if: always()
         env:
           GH_TOKEN:  ${{ secrets.VPS_DISK_TOKEN }}
-          USERNAME:  ${{ github.event.inputs.username }}
-        run: |
-          FILE_PATH="tunnel/${USERNAME}.txt"
-          API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
-          RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" "$API_URL")
-          SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])" 2>/dev/null || true)
-          if [ -n "$SHA" ]; then
-            BODY=$(python3 -c "import json; print(json.dumps({'message':'Clean tunnel','sha':'${SHA}'}))")
-            curl -s -X DELETE "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY"
-          fi
