@@ -27,11 +27,6 @@ jobs:
           node-version: '20'
       - name: npm install
         run: npm install ws
-      - name: install bore
-        run: |
-          curl -sL https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz | tar xz
-          chmod +x bore
-          sudo mv bore /usr/local/bin/bore
       - name: setup desktop
         env:
           OS_CHOICE: ${{ github.event.inputs.os }}
@@ -94,16 +89,42 @@ jobs:
             if [ "$S" = "200" ] || [ "$S" = "302" ]; then echo "port 80 ready"; break; fi
             sleep 5
           done
-          bore local 80 --to bore.pub > /tmp/bore.txt 2>&1 &
-          BORE_PORT=""
+
+          # Try localhost.run first (no install needed, just SSH)
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -R 80:localhost:80 nokey@localhost.run > /tmp/tunnel.txt 2>&1 &
+          TUNNEL_PID=$!
+
+          LINK=""
           for i in $(seq 1 30); do
-            BORE_PORT=$(grep -oP 'listening at bore\.pub:\K[0-9]+' /tmp/bore.txt 2>/dev/null | head -1 || true)
-            [ -n "$BORE_PORT" ] && break
+            LINK=$(grep -oP 'https://[a-zA-Z0-9\-]+\.lhr\.life' /tmp/tunnel.txt 2>/dev/null | head -1 || true)
+            [ -n "$LINK" ] && echo "localhost.run link: $LINK" && break
             sleep 2
           done
-          if [ -z "$BORE_PORT" ]; then echo "bore failed"; cat /tmp/bore.txt; exit 1; fi
-          LINK="http://bore.pub:${BORE_PORT}"
-          echo "link: $LINK"
+
+          # Fallback to bore if localhost.run failed
+          if [ -z "$LINK" ]; then
+            echo "localhost.run failed, trying bore..."
+            kill $TUNNEL_PID 2>/dev/null || true
+            curl -sL https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz | tar xz
+            chmod +x bore && sudo mv bore /usr/local/bin/bore
+            bore local 80 --to bore.pub > /tmp/bore.txt 2>&1 &
+            for i in $(seq 1 30); do
+              LINK=$(grep -oP 'https?://[a-zA-Z0-9\-]+\.bore\.pub(:[0-9]+)?' /tmp/bore.txt 2>/dev/null | head -1 || true)
+              BORE_PORT=$(grep -oP 'listening at bore\.pub:\K[0-9]+' /tmp/bore.txt 2>/dev/null | head -1 || true)
+              if [ -n "$BORE_PORT" ]; then LINK="http://bore.pub:${BORE_PORT}"; break; fi
+              sleep 2
+            done
+          fi
+
+          if [ -z "$LINK" ]; then
+            echo "ERROR: all tunnels failed"
+            cat /tmp/tunnel.txt || true
+            cat /tmp/bore.txt || true
+            exit 1
+          fi
+
+          echo "Final link: $LINK"
+
           FILE_PATH="tunnel/${USERNAME}.txt"
           API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
           CONTENT=$(echo -n "$LINK" | base64 -w 0)
