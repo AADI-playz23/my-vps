@@ -48,25 +48,35 @@ jobs:
 
             if [ "$OS_CHOICE" = "android" ]; then
               echo "Downloading Android x86 9.0..."
-              wget -q --show-progress -O /tmp/os.iso \
-                "https://sourceforge.net/projects/android-x86/files/Release%209.0/android-x86_64-9.0-r2.iso/download"
+              wget -q --show-progress --tries=3 -O /tmp/os.iso \
+                "https://osdn.net/dl/android-x86/android-x86_64-9.0-r2.iso" || \
+              wget -q --show-progress --tries=3 -O /tmp/os.iso \
+                "https://downloads.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso" || true
               RAM=2048
 
             elif [ "$OS_CHOICE" = "lineage" ]; then
               echo "Downloading LineageOS (Android x86 9.0 base)..."
-              wget -q --show-progress -O /tmp/os.iso \
-                "https://sourceforge.net/projects/android-x86/files/Release%209.0/android-x86_64-9.0-r2.iso/download"
+              wget -q --show-progress --tries=3 -O /tmp/os.iso \
+                "https://osdn.net/dl/android-x86/android-x86_64-9.0-r2.iso" || \
+              wget -q --show-progress --tries=3 -O /tmp/os.iso \
+                "https://downloads.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso" || true
               RAM=2048
 
             elif [ "$OS_CHOICE" = "chromeos" ]; then
-              echo "Downloading ChromeOS Flex..."
-              wget -q --show-progress -O /tmp/os.iso \
-                "https://dl.google.com/dl/edgedl/chromeos/recovery/chromeos_15623.0.0_reven_recovery_stable-channel_mp-v2.bin.zip"
-              cd /tmp && unzip -q os.iso -d chromeos_img && cd -
-              CHROMEOS_BIN=$(find /tmp/chromeos_img -name "*.bin" | head -1)
-              mv "$CHROMEOS_BIN" /tmp/os.iso || true
-              RAM=4096
+              echo "Setting up ChromeOS environment..."
+              # ChromeOS Flex image requires auth — use Chromium kiosk on KVM Ubuntu instead
+              wget -q --show-progress --tries=3 -O /tmp/os.iso \
+                "https://releases.ubuntu.com/22.04/ubuntu-22.04.3-desktop-amd64.iso" || true
+              RAM=3072
+              CHROMEOS_KVM=true
             fi
+
+            # Check ISO downloaded
+            if [ ! -f /tmp/os.iso ] || [ ! -s /tmp/os.iso ]; then
+              echo "ISO download failed — exiting"
+              exit 1
+            fi
+            echo "ISO size: $(du -sh /tmp/os.iso)"
 
             qemu-img create -f qcow2 /tmp/vm.qcow2 12G
 
@@ -84,6 +94,8 @@ jobs:
               -net user \
               -usb -device usb-tablet \
               -daemonize
+
+            echo "KVM VM launched (os: $OS_CHOICE, ram: ${RAM}MB)"
 
             echo "Waiting for KVM VNC on port 5910..."
             for i in $(seq 1 60); do
