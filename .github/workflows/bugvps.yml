@@ -27,6 +27,10 @@ jobs:
           node-version: '20'
       - name: npm install
         run: npm install ws
+      - name: install cloudflared
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb
       - name: setup desktop
         env:
           OS_CHOICE: ${{ github.event.inputs.os }}
@@ -41,20 +45,34 @@ jobs:
           if [ "$OS_CHOICE" = "chromeos" ]; then sudo apt-get install -y --no-install-recommends chromium-browser || true; fi
 
           Xvfb :1 -screen 0 1280x720x24 &
-          sleep 2
+          sleep 3
           DISPLAY=:1 xfce4-session &
-          sleep 4
+          sleep 6
           x11vnc -display :1 -nopw -forever -shared -rfbport 5900 -bg -o /tmp/x11vnc.log
-          sleep 2
-          websockify --web /usr/share/novnc/ 6080 localhost:5900 &
-          sleep 2
+          sleep 3
 
-          nc -z localhost 5900 && echo "VNC ready" || echo "VNC not ready"
-          nc -z localhost 6080 && echo "noVNC ready" || echo "noVNC not ready"
+          for i in $(seq 1 20); do
+            nc -z localhost 5900 2>/dev/null && echo "x11vnc ready" && break
+            sleep 2
+          done
+
+          websockify --web /usr/share/novnc/ 6080 localhost:5900 &
+          sleep 3
+
+          for i in $(seq 1 20); do
+            nc -z localhost 6080 2>/dev/null && echo "websockify ready" && break
+            sleep 2
+          done
 
           printf '%s\n' 'server {' '  listen 80;' '  location /novnc/ {' '    proxy_pass http://127.0.0.1:6080/;' '    proxy_http_version 1.1;' '    proxy_set_header Upgrade $http_upgrade;' '    proxy_set_header Connection "upgrade";' '    proxy_set_header Host $host;' '    proxy_read_timeout 3600s;' '  }' '  location = / { return 302 /novnc/vnc.html; }' '  location /abvps/ {' '    proxy_pass http://127.0.0.1:8081/;' '    proxy_http_version 1.1;' '    proxy_set_header Upgrade $http_upgrade;' '    proxy_set_header Connection "upgrade";' '    proxy_set_header Host $host;' '    proxy_read_timeout 3600s;' '  }' '}' | sudo tee /etc/nginx/sites-available/default
           sudo nginx -t && sudo systemctl restart nginx
-          echo "nginx ready"
+
+          for i in $(seq 1 20); do
+            S=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/novnc/ || echo "000")
+            echo "nginx check $i: $S"
+            if [ "$S" = "200" ] || [ "$S" = "301" ] || [ "$S" = "302" ]; then echo "nginx ready"; break; fi
+            sleep 3
+          done
 
       - name: start backend
         env:
@@ -77,25 +95,19 @@ jobs:
           TG_CHAT: ${{ secrets.TG_CHAT_ID }}
           OS_CHOICE: ${{ github.event.inputs.os }}
         run: |
-          for i in $(seq 1 30); do
-            S=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/ || echo "000")
-            if [ "$S" = "200" ] || [ "$S" = "302" ]; then echo "port 80 ready"; break; fi
-            sleep 3
-          done
-
-          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -R 80:localhost:80 nokey@localhost.run > /tmp/tunnel.txt 2>&1 &
+          cloudflared tunnel --url http://localhost:80 > /tmp/cf.txt 2>&1 &
 
           LINK=""
-          for i in $(seq 1 40); do
-            LINK=$(grep -oP 'https://[a-zA-Z0-9\-]+\.lhr\.life' /tmp/tunnel.txt 2>/dev/null | head -1 || true)
+          for i in $(seq 1 50); do
+            LINK=$(grep -oP 'https://[a-z0-9\-]+\.trycloudflare\.com' /tmp/cf.txt 2>/dev/null | head -1 || true)
             [ -n "$LINK" ] && echo "tunnel ready: $LINK" && break
-            echo "waiting for tunnel... attempt $i"
-            sleep 3
+            echo "  waiting for tunnel... attempt $i"
+            sleep 2
           done
 
           if [ -z "$LINK" ]; then
-            echo "tunnel failed"
-            cat /tmp/tunnel.txt
+            echo "cloudflare tunnel failed - full log:"
+            cat /tmp/cf.txt
             exit 1
           fi
 
@@ -104,13 +116,23 @@ jobs:
           CONTENT=$(echo -n "$LINK" | base64 -w 0)
           RESPONSE=$(curl -s -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" "$API_URL" || true)
           SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha',''))" 2>/dev/null || true)
+
           if [ -n "$SHA" ]; then
             BODY=$(python3 -c "import json; print(json.dumps({'message':'update','content':'${CONTENT}','sha':'${SHA}'}))")
           else
             BODY=$(python3 -c "import json; print(json.dumps({'message':'new','content':'${CONTENT}'}))")
           fi
-          curl -s -X PUT "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY"
-          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" -H "Content-Type: application/json" -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"online: ${USERNAME} os: ${OS_CHOICE} ${LINK}/novnc/vnc.html\"}" > /dev/null || true
+
+          PUSH=$(curl -s -X PUT "$API_URL" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "User-Agent: ABVPS" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+          echo "GitHub push response: $PUSH"
+
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"online: ${USERNAME} os: ${OS_CHOICE} ${LINK}/novnc/vnc.html\"}" > /dev/null || true
 
       - name: wait
         env:
