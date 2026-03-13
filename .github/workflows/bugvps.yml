@@ -34,36 +34,28 @@ jobs:
         run: |
           mkdir -p /home/runner/abvps-workspace/$USERNAME
           sudo apt-get update -qq
-          sudo apt-get install -y nginx guacd tomcat9 wget curl netcat-openbsd xrdp xfce4 xfce4-terminal thunar mousepad
+          sudo apt-get install -y nginx x11vnc xvfb novnc websockify xfce4 xfce4-terminal thunar mousepad curl wget netcat-openbsd
           if [ "$OS_CHOICE" = "ubuntu" ]; then sudo apt-get install -y --no-install-recommends firefox; fi
           if [ "$OS_CHOICE" = "kali" ]; then sudo apt-get install -y --no-install-recommends nmap sqlmap hydra john aircrack-ng; fi
-          echo "runner:abvps" | sudo chpasswd
-          echo "xfce4-session" | sudo tee /home/runner/.xsession
-          sudo chmod 755 /home/runner/.xsession
-          sudo systemctl enable xrdp
-          sudo systemctl restart xrdp
-          for i in $(seq 1 30); do nc -z localhost 3389 2>/dev/null && echo "xrdp ready" && break; sleep 2; done
-          sudo mkdir -p /etc/guacamole
-          printf '%s\n' '<user-mapping>' '  <authorize username="abvps" password="abvps">' '    <connection name="desktop">' '      <protocol>rdp</protocol>' '      <param name="hostname">localhost</param>' '      <param name="port">3389</param>' '      <param name="username">runner</param>' '      <param name="password">abvps</param>' '      <param name="security">any</param>' '      <param name="ignore-cert">true</param>' '      <param name="resize-method">display-update</param>' '    </connection>' '  </authorize>' '</user-mapping>' | sudo tee /etc/guacamole/user-mapping.xml
-          printf '%s\n' 'guacd-hostname: localhost' 'guacd-port: 4822' 'user-mapping: /etc/guacamole/user-mapping.xml' | sudo tee /etc/guacamole/guacamole.properties
-          sudo chmod -R 777 /etc/guacamole
-          sudo mkdir -p /var/lib/tomcat9/.guacamole
-          sudo ln -sf /etc/guacamole/guacamole.properties /var/lib/tomcat9/.guacamole/guacamole.properties
-          sudo ln -sf /etc/guacamole/user-mapping.xml /var/lib/tomcat9/.guacamole/user-mapping.xml
-          sudo bash -c 'echo "GUACAMOLE_HOME=/etc/guacamole" >> /etc/default/tomcat9'
-          wget -q -O /tmp/guacamole.war "https://archive.apache.org/dist/guacamole/1.5.4/binary/guacamole-1.5.4.war"
-          sudo cp /tmp/guacamole.war /var/lib/tomcat9/webapps/guacamole.war
-          sudo chmod 777 /var/lib/tomcat9/webapps/guacamole.war
-          sudo systemctl restart guacd
-          sudo systemctl restart tomcat9
-          for i in $(seq 1 60); do
-            S=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/guacamole/ || echo "000")
-            echo "guac check $i: $S"
-            if [ "$S" = "200" ] || [ "$S" = "302" ]; then echo "guacamole ready"; break; fi
-            sleep 5
-          done
-          printf '%s\n' 'server {' '  listen 80;' '  location /guacamole/ {' '    proxy_pass http://127.0.0.1:8080/guacamole/;' '    proxy_buffering off;' '    proxy_http_version 1.1;' '    proxy_set_header Upgrade $http_upgrade;' '    proxy_set_header Connection "upgrade";' '    proxy_set_header Host $host;' '    proxy_read_timeout 3600s;' '  }' '  location = / { return 302 /guacamole/; }' '  location /abvps/ {' '    proxy_pass http://127.0.0.1:8081/;' '    proxy_http_version 1.1;' '    proxy_set_header Upgrade $http_upgrade;' '    proxy_set_header Connection "upgrade";' '    proxy_set_header Host $host;' '    proxy_read_timeout 3600s;' '  }' '}' | sudo tee /etc/nginx/sites-available/default
+          if [ "$OS_CHOICE" = "fedora" ]; then sudo apt-get install -y --no-install-recommends firefox; fi
+          if [ "$OS_CHOICE" = "chromeos" ]; then sudo apt-get install -y --no-install-recommends chromium-browser || true; fi
+
+          Xvfb :1 -screen 0 1280x720x24 &
+          sleep 2
+          DISPLAY=:1 xfce4-session &
+          sleep 4
+          x11vnc -display :1 -nopw -forever -shared -rfbport 5900 -bg -o /tmp/x11vnc.log
+          sleep 2
+          websockify --web /usr/share/novnc/ 6080 localhost:5900 &
+          sleep 2
+
+          nc -z localhost 5900 && echo "VNC ready" || echo "VNC not ready"
+          nc -z localhost 6080 && echo "noVNC ready" || echo "noVNC not ready"
+
+          printf '%s\n' 'server {' '  listen 80;' '  location /novnc/ {' '    proxy_pass http://127.0.0.1:6080/;' '    proxy_http_version 1.1;' '    proxy_set_header Upgrade $http_upgrade;' '    proxy_set_header Connection "upgrade";' '    proxy_set_header Host $host;' '    proxy_read_timeout 3600s;' '  }' '  location = / { return 302 /novnc/vnc.html; }' '  location /abvps/ {' '    proxy_pass http://127.0.0.1:8081/;' '    proxy_http_version 1.1;' '    proxy_set_header Upgrade $http_upgrade;' '    proxy_set_header Connection "upgrade";' '    proxy_set_header Host $host;' '    proxy_read_timeout 3600s;' '  }' '}' | sudo tee /etc/nginx/sites-available/default
           sudo nginx -t && sudo systemctl restart nginx
+          echo "nginx ready"
+
       - name: start backend
         env:
           VPS_USER: ${{ github.event.inputs.username }}
@@ -76,6 +68,7 @@ jobs:
           nohup node server.js > /tmp/abvps.log 2>&1 &
           sleep 4
           cat /tmp/abvps.log
+
       - name: open tunnel
         env:
           GH_TOKEN: ${{ secrets.VPS_DISK_TOKEN }}
@@ -84,46 +77,27 @@ jobs:
           TG_CHAT: ${{ secrets.TG_CHAT_ID }}
           OS_CHOICE: ${{ github.event.inputs.os }}
         run: |
-          for i in $(seq 1 60); do
+          for i in $(seq 1 30); do
             S=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/ || echo "000")
             if [ "$S" = "200" ] || [ "$S" = "302" ]; then echo "port 80 ready"; break; fi
-            sleep 5
+            sleep 3
           done
 
-          # Try localhost.run first (no install needed, just SSH)
           ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -R 80:localhost:80 nokey@localhost.run > /tmp/tunnel.txt 2>&1 &
-          TUNNEL_PID=$!
 
           LINK=""
-          for i in $(seq 1 30); do
+          for i in $(seq 1 40); do
             LINK=$(grep -oP 'https://[a-zA-Z0-9\-]+\.lhr\.life' /tmp/tunnel.txt 2>/dev/null | head -1 || true)
-            [ -n "$LINK" ] && echo "localhost.run link: $LINK" && break
-            sleep 2
+            [ -n "$LINK" ] && echo "tunnel ready: $LINK" && break
+            echo "waiting for tunnel... attempt $i"
+            sleep 3
           done
 
-          # Fallback to bore if localhost.run failed
           if [ -z "$LINK" ]; then
-            echo "localhost.run failed, trying bore..."
-            kill $TUNNEL_PID 2>/dev/null || true
-            curl -sL https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-unknown-linux-musl.tar.gz | tar xz
-            chmod +x bore && sudo mv bore /usr/local/bin/bore
-            bore local 80 --to bore.pub > /tmp/bore.txt 2>&1 &
-            for i in $(seq 1 30); do
-              LINK=$(grep -oP 'https?://[a-zA-Z0-9\-]+\.bore\.pub(:[0-9]+)?' /tmp/bore.txt 2>/dev/null | head -1 || true)
-              BORE_PORT=$(grep -oP 'listening at bore\.pub:\K[0-9]+' /tmp/bore.txt 2>/dev/null | head -1 || true)
-              if [ -n "$BORE_PORT" ]; then LINK="http://bore.pub:${BORE_PORT}"; break; fi
-              sleep 2
-            done
-          fi
-
-          if [ -z "$LINK" ]; then
-            echo "ERROR: all tunnels failed"
-            cat /tmp/tunnel.txt || true
-            cat /tmp/bore.txt || true
+            echo "tunnel failed"
+            cat /tmp/tunnel.txt
             exit 1
           fi
-
-          echo "Final link: $LINK"
 
           FILE_PATH="tunnel/${USERNAME}.txt"
           API_URL="https://api.github.com/repos/AADI-playz23/vps-disk/contents/${FILE_PATH}"
@@ -136,7 +110,8 @@ jobs:
             BODY=$(python3 -c "import json; print(json.dumps({'message':'new','content':'${CONTENT}'}))")
           fi
           curl -s -X PUT "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY"
-          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" -H "Content-Type: application/json" -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"online: ${USERNAME} os: ${OS_CHOICE} ${LINK}/guacamole/\"}" > /dev/null || true
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" -H "Content-Type: application/json" -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"online: ${USERNAME} os: ${OS_CHOICE} ${LINK}/novnc/vnc.html\"}" > /dev/null || true
+
       - name: wait
         env:
           GH_TOKEN: ${{ secrets.VPS_DISK_TOKEN }}
@@ -149,6 +124,7 @@ jobs:
             curl -s -X POST https://api.github.com/repos/AADI-playz23/my-vps/actions/workflows/bugvps.yml/dispatches -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"$USERNAME\",\"os\":\"$OS_CHOICE\",\"plan\":\"$PLAN\"}}" || true
             sleep 60
           fi
+
       - name: cleanup
         if: always()
         env:
