@@ -38,38 +38,145 @@ jobs:
         run: |
           mkdir -p /home/runner/abvps-workspace/$USERNAME
           sudo apt-get update -qq
-          sudo apt-get install -y nginx x11vnc xvfb novnc websockify xfce4 xfce4-terminal thunar mousepad curl wget netcat-openbsd
-          if [ "$OS_CHOICE" = "ubuntu" ]; then sudo apt-get install -y --no-install-recommends firefox; fi
-          if [ "$OS_CHOICE" = "kali" ]; then sudo apt-get install -y --no-install-recommends nmap sqlmap hydra john aircrack-ng; fi
-          if [ "$OS_CHOICE" = "fedora" ]; then sudo apt-get install -y --no-install-recommends firefox; fi
-          if [ "$OS_CHOICE" = "chromeos" ]; then sudo apt-get install -y --no-install-recommends chromium-browser || true; fi
+          sudo apt-get install -y nginx novnc websockify curl wget netcat-openbsd
 
-          Xvfb :1 -screen 0 1280x720x24 &
+          # ── KVM-based OS (Android / ChromeOS / LineageOS) ────────────────
+          if [ "$OS_CHOICE" = "android" ] || [ "$OS_CHOICE" = "chromeos" ] || [ "$OS_CHOICE" = "lineage" ]; then
+            sudo apt-get install -y qemu-kvm qemu-utils ovmf cpu-checker
+            sudo modprobe kvm-intel || sudo modprobe kvm-amd || true
+            echo "KVM status:"; sudo kvm-ok || true
+
+            if [ "$OS_CHOICE" = "android" ]; then
+              echo "Downloading Android x86 9.0..."
+              wget -q --show-progress -O /tmp/os.iso \
+                "https://sourceforge.net/projects/android-x86/files/Release%209.0/android-x86_64-9.0-r2.iso/download"
+              RAM=2048
+
+            elif [ "$OS_CHOICE" = "lineage" ]; then
+              echo "Downloading LineageOS (Android x86 9.0 base)..."
+              wget -q --show-progress -O /tmp/os.iso \
+                "https://sourceforge.net/projects/android-x86/files/Release%209.0/android-x86_64-9.0-r2.iso/download"
+              RAM=2048
+
+            elif [ "$OS_CHOICE" = "chromeos" ]; then
+              echo "Downloading ChromeOS Flex..."
+              wget -q --show-progress -O /tmp/os.iso \
+                "https://dl.google.com/dl/edgedl/chromeos/recovery/chromeos_15623.0.0_reven_recovery_stable-channel_mp-v2.bin.zip"
+              cd /tmp && unzip -q os.iso -d chromeos_img && cd -
+              CHROMEOS_BIN=$(find /tmp/chromeos_img -name "*.bin" | head -1)
+              mv "$CHROMEOS_BIN" /tmp/os.iso || true
+              RAM=4096
+            fi
+
+            qemu-img create -f qcow2 /tmp/vm.qcow2 12G
+
+            sudo qemu-system-x86_64 \
+              -enable-kvm \
+              -m $RAM \
+              -smp 2 \
+              -cpu host \
+              -drive file=/tmp/vm.qcow2,format=qcow2,if=virtio \
+              -drive file=/tmp/os.iso,format=raw,readonly=on,media=cdrom \
+              -boot order=d \
+              -vga virtio \
+              -display vnc=127.0.0.1:10 \
+              -net nic,model=virtio \
+              -net user \
+              -usb -device usb-tablet \
+              -daemonize
+
+            echo "Waiting for KVM VNC on port 5910..."
+            for i in $(seq 1 60); do
+              nc -z localhost 5910 2>/dev/null && echo "KVM VNC ready" && break
+              echo "  kvm check $i..."
+              sleep 5
+            done
+
+            websockify --web /usr/share/novnc/ --heartbeat=30 6080 localhost:5910 &
+
+          # ── Native Linux OS ──────────────────────────────────────────────
+          else
+            sudo apt-get install -y xvfb x11vnc xfce4 xfce4-terminal thunar mousepad
+
+            if [ "$OS_CHOICE" = "ubuntu" ]; then
+              sudo apt-get install -y --no-install-recommends firefox
+            elif [ "$OS_CHOICE" = "fedora" ]; then
+              sudo apt-get install -y --no-install-recommends firefox
+              sudo hostnamectl set-hostname fedora-abvps || true
+            elif [ "$OS_CHOICE" = "alpine" ]; then
+              sudo hostnamectl set-hostname alpine-abvps || true
+            elif [ "$OS_CHOICE" = "kali" ]; then
+              sudo apt-get install -y --no-install-recommends nmap sqlmap hydra john aircrack-ng nikto gobuster
+              sudo hostnamectl set-hostname kali-abvps || true
+            elif [ "$OS_CHOICE" = "arch" ]; then
+              sudo hostnamectl set-hostname arch-abvps || true
+            fi
+
+            Xvfb :1 -screen 0 1280x720x24 &
+            sleep 3
+            DISPLAY=:1 xfce4-session &
+            sleep 6
+            x11vnc -display :1 -nopw -forever -shared -rfbport 5900 -bg -o /tmp/x11vnc.log
+            sleep 3
+
+            echo "Waiting for x11vnc on 5900..."
+            for i in $(seq 1 20); do
+              nc -z localhost 5900 2>/dev/null && echo "x11vnc ready" && break
+              sleep 2
+            done
+
+            websockify --web /usr/share/novnc/ --heartbeat=30 6080 localhost:5900 &
+          fi
+
           sleep 3
-          DISPLAY=:1 xfce4-session &
-          sleep 6
-          x11vnc -display :1 -nopw -forever -shared -rfbport 5900 -bg -o /tmp/x11vnc.log
-          sleep 3
-
-          for i in $(seq 1 20); do
-            nc -z localhost 5900 2>/dev/null && echo "x11vnc ready" && break
-            sleep 2
-          done
-
-          websockify --web /usr/share/novnc/ --heartbeat=30 6080 localhost:5900 &
-          sleep 3
-
+          echo "Waiting for websockify on 6080..."
           for i in $(seq 1 20); do
             nc -z localhost 6080 2>/dev/null && echo "websockify ready" && break
             sleep 2
           done
 
-          printf '%s\n' 'server {' '  listen 80;' '  location /novnc/ {' '    proxy_pass http://127.0.0.1:6080/;' '    proxy_http_version 1.1;' '    proxy_set_header Upgrade $http_upgrade;' '    proxy_set_header Connection "upgrade";' '    proxy_set_header Host $host;' '    proxy_set_header X-Real-IP $remote_addr;' '    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;' '    proxy_set_header X-Forwarded-Proto $scheme;' '    proxy_read_timeout 3600s;' '    proxy_send_timeout 3600s;' '    proxy_buffering off;' '  }' '  location /websockify {' '    proxy_pass http://127.0.0.1:6080/websockify;' '    proxy_http_version 1.1;' '    proxy_set_header Upgrade $http_upgrade;' '    proxy_set_header Connection "upgrade";' '    proxy_set_header Host $host;' '    proxy_read_timeout 3600s;' '    proxy_send_timeout 3600s;' '    proxy_buffering off;' '  }' '  location = / { return 302 /novnc/vnc.html; }' '  location /abvps/ {' '    proxy_pass http://127.0.0.1:8081/;' '    proxy_http_version 1.1;' '    proxy_set_header Upgrade $http_upgrade;' '    proxy_set_header Connection "upgrade";' '    proxy_set_header Host $host;' '    proxy_read_timeout 3600s;' '  }' '}' | sudo tee /etc/nginx/sites-available/default
+          # ── nginx ────────────────────────────────────────────────────────
+          printf '%s\n' \
+            'server {' \
+            '  listen 80;' \
+            '  location /novnc/ {' \
+            '    proxy_pass http://127.0.0.1:6080/;' \
+            '    proxy_http_version 1.1;' \
+            '    proxy_set_header Upgrade $http_upgrade;' \
+            '    proxy_set_header Connection "upgrade";' \
+            '    proxy_set_header Host $host;' \
+            '    proxy_set_header X-Forwarded-Proto $scheme;' \
+            '    proxy_read_timeout 3600s;' \
+            '    proxy_send_timeout 3600s;' \
+            '    proxy_buffering off;' \
+            '  }' \
+            '  location /websockify {' \
+            '    proxy_pass http://127.0.0.1:6080/websockify;' \
+            '    proxy_http_version 1.1;' \
+            '    proxy_set_header Upgrade $http_upgrade;' \
+            '    proxy_set_header Connection "upgrade";' \
+            '    proxy_set_header Host $host;' \
+            '    proxy_read_timeout 3600s;' \
+            '    proxy_send_timeout 3600s;' \
+            '    proxy_buffering off;' \
+            '  }' \
+            '  location = / { return 302 /novnc/vnc.html; }' \
+            '  location /abvps/ {' \
+            '    proxy_pass http://127.0.0.1:8081/;' \
+            '    proxy_http_version 1.1;' \
+            '    proxy_set_header Upgrade $http_upgrade;' \
+            '    proxy_set_header Connection "upgrade";' \
+            '    proxy_set_header Host $host;' \
+            '    proxy_read_timeout 3600s;' \
+            '  }' \
+            '}' | sudo tee /etc/nginx/sites-available/default
+
           sudo nginx -t && sudo systemctl restart nginx
 
+          echo "Waiting for nginx on port 80..."
           for i in $(seq 1 20); do
             S=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/novnc/ || echo "000")
-            echo "nginx check $i: $S"
+            echo "  nginx check $i: $S"
             if [ "$S" = "200" ] || [ "$S" = "301" ] || [ "$S" = "302" ]; then echo "nginx ready"; break; fi
             sleep 3
           done
@@ -106,7 +213,7 @@ jobs:
           done
 
           if [ -z "$LINK" ]; then
-            echo "cloudflare tunnel failed - full log:"
+            echo "cloudflare tunnel failed"
             cat /tmp/cf.txt
             exit 1
           fi
@@ -128,7 +235,7 @@ jobs:
             -H "User-Agent: ABVPS" \
             -H "Content-Type: application/json" \
             -d "$BODY")
-          echo "GitHub push response: $PUSH"
+          echo "GitHub push: $PUSH"
 
           curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
@@ -143,7 +250,10 @@ jobs:
         run: |
           sleep 20700
           if [ "$PLAN" != "free" ]; then
-            curl -s -X POST https://api.github.com/repos/AADI-playz23/my-vps/actions/workflows/bugvps.yml/dispatches -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github.v3+json" -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"$USERNAME\",\"os\":\"$OS_CHOICE\",\"plan\":\"$PLAN\"}}" || true
+            curl -s -X POST https://api.github.com/repos/AADI-playz23/my-vps/actions/workflows/bugvps.yml/dispatches \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -d "{\"ref\":\"main\",\"inputs\":{\"username\":\"$USERNAME\",\"os\":\"$OS_CHOICE\",\"plan\":\"$PLAN\"}}" || true
             sleep 60
           fi
 
@@ -161,6 +271,12 @@ jobs:
           SHA=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])" 2>/dev/null || true)
           if [ -n "$SHA" ]; then
             BODY=$(python3 -c "import json; print(json.dumps({'message':'clean','sha':'${SHA}'}))")
-            curl -s -X DELETE "$API_URL" -H "Authorization: Bearer $GH_TOKEN" -H "User-Agent: ABVPS" -H "Content-Type: application/json" -d "$BODY" || true
+            curl -s -X DELETE "$API_URL" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "User-Agent: ABVPS" \
+              -H "Content-Type: application/json" \
+              -d "$BODY" || true
           fi
-          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" -H "Content-Type: application/json" -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"offline: ${USERNAME}\"}" > /dev/null || true
+          curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{\"chat_id\":\"${TG_CHAT}\",\"text\":\"offline: ${USERNAME}\"}" > /dev/null || true
