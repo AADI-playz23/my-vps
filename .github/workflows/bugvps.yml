@@ -46,65 +46,43 @@ jobs:
             sudo modprobe kvm-intel || sudo modprobe kvm-amd || true
             echo "KVM status:"; sudo kvm-ok || true
 
-            if [ "$OS_CHOICE" = "android" ]; then
+            if [ "$OS_CHOICE" = "android" ] || [ "$OS_CHOICE" = "lineage" ]; then
               echo "Downloading Android x86 9.0..."
               wget -q --show-progress --tries=3 -O /tmp/os.iso \
                 "https://osdn.net/dl/android-x86/android-x86_64-9.0-r2.iso" || \
               wget -q --show-progress --tries=3 -O /tmp/os.iso \
                 "https://downloads.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso" || true
-              RAM=2048
-
-            elif [ "$OS_CHOICE" = "lineage" ]; then
-              echo "Downloading LineageOS (Android x86 9.0 base)..."
-              wget -q --show-progress --tries=3 -O /tmp/os.iso \
-                "https://osdn.net/dl/android-x86/android-x86_64-9.0-r2.iso" || \
-              wget -q --show-progress --tries=3 -O /tmp/os.iso \
-                "https://downloads.sourceforge.net/project/android-x86/Release%209.0/android-x86_64-9.0-r2.iso" || true
-              RAM=2048
+              if [ ! -s /tmp/os.iso ]; then echo "Android ISO download failed"; exit 1; fi
+              echo "ISO size: $(du -sh /tmp/os.iso)"
+              qemu-img create -f qcow2 /tmp/vm.qcow2 12G
+              sudo qemu-system-x86_64 \
+                -enable-kvm -m 2048 -smp 2 -cpu host \
+                -drive file=/tmp/vm.qcow2,format=qcow2,if=virtio \
+                -drive file=/tmp/os.iso,format=raw,readonly=on,media=cdrom \
+                -boot order=d -vga virtio -display vnc=127.0.0.1:10 \
+                -net nic,model=virtio -net user \
+                -usb -device usb-tablet -daemonize
+              echo "Waiting for KVM VNC on 5910..."
+              for i in $(seq 1 60); do
+                nc -z localhost 5910 2>/dev/null && echo "KVM VNC ready" && break
+                echo "  kvm check $i..."; sleep 5
+              done
+              websockify --web /usr/share/novnc/ --heartbeat=30 6080 localhost:5910 &
 
             elif [ "$OS_CHOICE" = "chromeos" ]; then
-              echo "Setting up ChromeOS environment..."
-              # ChromeOS Flex image requires auth — use Chromium kiosk on KVM Ubuntu instead
-              wget -q --show-progress --tries=3 -O /tmp/os.iso \
-                "https://releases.ubuntu.com/22.04/ubuntu-22.04.3-desktop-amd64.iso" || true
-              RAM=3072
-              CHROMEOS_KVM=true
-            fi
-
-            # Check ISO downloaded
-            if [ ! -f /tmp/os.iso ] || [ ! -s /tmp/os.iso ]; then
-              echo "ISO download failed — exiting"
-              exit 1
-            fi
-            echo "ISO size: $(du -sh /tmp/os.iso)"
-
-            qemu-img create -f qcow2 /tmp/vm.qcow2 12G
-
-            sudo qemu-system-x86_64 \
-              -enable-kvm \
-              -m $RAM \
-              -smp 2 \
-              -cpu host \
-              -drive file=/tmp/vm.qcow2,format=qcow2,if=virtio \
-              -drive file=/tmp/os.iso,format=raw,readonly=on,media=cdrom \
-              -boot order=d \
-              -vga virtio \
-              -display vnc=127.0.0.1:10 \
-              -net nic,model=virtio \
-              -net user \
-              -usb -device usb-tablet \
-              -daemonize
-
-            echo "KVM VM launched (os: $OS_CHOICE, ram: ${RAM}MB)"
-
-            echo "Waiting for KVM VNC on port 5910..."
-            for i in $(seq 1 60); do
-              nc -z localhost 5910 2>/dev/null && echo "KVM VNC ready" && break
-              echo "  kvm check $i..."
+              sudo apt-get install -y xvfb x11vnc xfce4 xfce4-terminal chromium-browser || \
+              sudo apt-get install -y xvfb x11vnc xfce4 xfce4-terminal chromium
+              Xvfb :1 -screen 0 1280x720x24 &
+              sleep 3
+              DISPLAY=:1 xfce4-session &
               sleep 5
-            done
-
-            websockify --web /usr/share/novnc/ --heartbeat=30 6080 localhost:5910 &
+              DISPLAY=:1 chromium-browser --kiosk --no-sandbox --disable-infobars \
+                --start-maximized --app=https://google.com &
+              sleep 3
+              x11vnc -display :1 -nopw -forever -shared -rfbport 5900 -bg -o /tmp/x11vnc.log
+              for i in $(seq 1 20); do nc -z localhost 5900 2>/dev/null && break; sleep 2; done
+              websockify --web /usr/share/novnc/ --heartbeat=30 6080 localhost:5900 &
+            fi
 
           # ── Native Linux OS ──────────────────────────────────────────────
           else
