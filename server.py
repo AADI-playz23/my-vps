@@ -2,119 +2,206 @@ import asyncio
 import websockets
 import json
 import os
-import signal
+import sys
+import psutil
 
-# Max seconds a single command is allowed to run
 COMMAND_TIMEOUT = 60
+FM_DIR = '/tmp/fm'   # temp file manager storage
 
 async def shell_handler(websocket):
     current_dir = os.path.expanduser("~")
-    client_addr = websocket.remote_address
-    print(f"[+] Client connected: {client_addr}")
+    os.makedirs(FM_DIR, exist_ok=True)
 
-    await send(websocket, f"Connected to AMD EPYC Shell — cwd: {current_dir}\n")
+    # Read plan limits from env (set by main.yml)
+    plan       = os.environ.get('VPS_PLAN',       'free')
+    cpu_cores  = int(os.environ.get('VPS_CPU',    '1'))
+    ram_mb     = int(os.environ.get('VPS_RAM',    '512'))
+    fm_enabled = os.environ.get('VPS_FM',         'false').lower() == 'true'
+    storage_mb = int(os.environ.get('VPS_STORAGE','0'))
+
+    print(f"[+] Client connected | plan={plan} cpu={cpu_cores} ram={ram_mb}MB fm={fm_enabled}")
+
+    await send(websocket, f"Connected — AbsoraCloud VPS ({plan} plan)\n")
 
     try:
         async for message in websocket:
             try:
                 data = json.loads(message)
             except json.JSONDecodeError:
-                await send(websocket, "Error: Invalid JSON payload.\n")
+                await send(websocket, "Error: Invalid JSON.\n")
                 continue
 
-            cmd = data.get("cmd", "").strip()
+            cmd     = data.get('cmd', '').strip()
+            content = data.get('content', '')
+
             if not cmd:
                 continue
 
+            # ── Internal: metrics ─────────────────────────────────
+            if cmd == '__metrics__':
+                await send_metrics(websocket, cpu_cores, ram_mb, storage_mb)
+                continue
+
+            # ── Internal: file manager list ───────────────────────
+            if cmd == '__fm_list__':
+                if not fm_enabled:
+                    await send(websocket, "File manager not available on your plan.\n")
+                    continue
+                try:
+                    files = sorted(os.listdir(FM_DIR))
+                except: files = []
+                await websocket.send(json.dumps({"type": "file_list", "data": files}))
+                continue
+
+            # ── Internal: file manager read ───────────────────────
+            if cmd.startswith('__fm_read__ '):
+                if not fm_enabled:
+                    await send(websocket, "File manager not available on your plan.\n")
+                    continue
+                filename = cmd[len('__fm_read__ '):].strip()
+                filename = os.path.basename(filename)  # safety
+                filepath = os.path.join(FM_DIR, filename)
+                try:
+                    with open(filepath, 'r', errors='replace') as f:
+                        file_content = f.read()
+                    await websocket.send(json.dumps({"type": "file_content", "data": {"filename": filename, "content": file_content}}))
+                except FileNotFoundError:
+                    await websocket.send(json.dumps({"type": "file_content", "data": {"filename": filename, "content": ""}}))
+                continue
+
+            # ── Internal: file manager write ──────────────────────
+            if cmd.startswith('__fm_write__ '):
+                if not fm_enabled:
+                    await send(websocket, "File manager not available on your plan.\n")
+                    continue
+                filename = cmd[len('__fm_write__ '):].strip()
+                filename = os.path.basename(filename)  # safety
+                filepath = os.path.join(FM_DIR, filename)
+
+                # Check storage limit
+                if storage_mb > 0:
+                    used = sum(os.path.getsize(os.path.join(FM_DIR, f)) for f in os.listdir(FM_DIR) if os.path.isfile(os.path.join(FM_DIR, f)))
+                    if used + len(content.encode()) > storage_mb * 1024 * 1024:
+                        await send(websocket, f"Storage limit reached ({storage_mb}MB).\n")
+                        continue
+
+                try:
+                    with open(filepath, 'w') as f:
+                        f.write(content)
+                    await send(websocket, f"File saved: {filename}\n")
+                except Exception as e:
+                    await send(websocket, f"Error saving file: {e}\n")
+                continue
+
             # ── Built-in: clear ───────────────────────────────────
-            if cmd == "clear":
+            if cmd == 'clear':
                 await websocket.send(json.dumps({"type": "clear"}))
                 continue
 
             # ── Built-in: cd ──────────────────────────────────────
-            if cmd.startswith("cd"):
-                parts = cmd.split(None, 1)
-                target = parts[1] if len(parts) > 1 else os.path.expanduser("~")
-                # Support ~ expansion
-                target = os.path.expanduser(target)
+            if cmd.startswith('cd'):
+                parts  = cmd.split(None, 1)
+                target = os.path.expanduser(parts[1] if len(parts) > 1 else '~')
                 if not os.path.isabs(target):
                     target = os.path.join(current_dir, target)
                 try:
                     os.chdir(target)
                     current_dir = os.getcwd()
-                    await send(websocket, f"")   # silent success like a real shell
                 except FileNotFoundError:
                     await send(websocket, f"bash: cd: {target}: No such file or directory\n")
                 except PermissionError:
                     await send(websocket, f"bash: cd: {target}: Permission denied\n")
-                # Always send updated prompt cwd so frontend can update it
                 await websocket.send(json.dumps({"type": "cwd", "data": current_dir}))
                 continue
 
-            # ── All other commands ────────────────────────────────
+            # ── All other shell commands ──────────────────────────
             try:
                 process = await asyncio.create_subprocess_shell(
                     cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=current_dir,
-                    env={**os.environ, "TERM": "xterm-256color", "HOME": os.path.expanduser("~")}
+                    env={**os.environ,
+                         "TERM": "xterm-256color",
+                         "HOME": os.path.expanduser("~"),
+                         "VPS_PLAN": plan}
                 )
 
-                # Stream stdout and stderr live as they arrive
-                async def stream_pipe(pipe):
+                async def stream(pipe):
                     while True:
                         chunk = await pipe.read(4096)
-                        if not chunk:
-                            break
-                        await send(websocket, chunk.decode(errors="replace"))
+                        if not chunk: break
+                        await send(websocket, chunk.decode(errors='replace'))
 
                 try:
                     await asyncio.wait_for(
-                        asyncio.gather(
-                            stream_pipe(process.stdout),
-                            stream_pipe(process.stderr),
-                        ),
+                        asyncio.gather(stream(process.stdout), stream(process.stderr)),
                         timeout=COMMAND_TIMEOUT
                     )
                     await process.wait()
-
                 except asyncio.TimeoutError:
-                    try:
-                        process.kill()
-                    except Exception:
-                        pass
+                    try: process.kill()
+                    except: pass
                     await send(websocket, f"\n[Timeout] Command killed after {COMMAND_TIMEOUT}s\n")
 
             except Exception as e:
-                await send(websocket, f"Error: {str(e)}\n")
+                await send(websocket, f"Error: {e}\n")
 
     except websockets.exceptions.ConnectionClosedOK:
-        print(f"[-] Client disconnected (clean): {client_addr}")
+        print("[-] Client disconnected (clean)")
     except websockets.exceptions.ConnectionClosedError as e:
-        print(f"[-] Client disconnected (error): {client_addr} — {e}")
+        print(f"[-] Client disconnected (error): {e}")
     except Exception as e:
-        print(f"[!] Unexpected error for {client_addr}: {e}")
+        print(f"[!] Unexpected error: {e}")
+
+
+async def send_metrics(websocket, cpu_cores, ram_mb, storage_mb):
+    try:
+        cpu  = psutil.cpu_percent(interval=0.5)
+        mem  = psutil.virtual_memory()
+        used_ram_mb = mem.used / (1024*1024)
+        ram_pct     = min(100, int(used_ram_mb / ram_mb * 100)) if ram_mb else 0
+
+        # Disk usage of FM dir
+        disk_pct = 0
+        if storage_mb > 0 and os.path.isdir(FM_DIR):
+            used_bytes = sum(
+                os.path.getsize(os.path.join(FM_DIR, f))
+                for f in os.listdir(FM_DIR)
+                if os.path.isfile(os.path.join(FM_DIR, f))
+            )
+            disk_pct = min(100, int(used_bytes / (storage_mb * 1024 * 1024) * 100))
+
+        await websocket.send(json.dumps({
+            "type": "metrics",
+            "data": {
+                "cpu":     round(cpu, 1),
+                "ram":     ram_pct,
+                "ram_mb":  round(used_ram_mb, 1),
+                "disk":    disk_pct,
+                "cpu_cores": cpu_cores,
+            }
+        }))
+    except Exception as e:
+        print(f"Metrics error: {e}")
 
 
 async def send(websocket, text):
-    """Helper to send a terminal message."""
     if text:
         await websocket.send(json.dumps({"type": "terminal", "data": text}))
 
 
 async def main():
-    print("[BugVPS] WebSocket shell server starting on 0.0.0.0:5000 ...")
+    print(f"[AbsoraCloud] WS shell server starting on 0.0.0.0:5000")
+    print(f"[AbsoraCloud] Plan={os.environ.get('VPS_PLAN','free')} CPU={os.environ.get('VPS_CPU','1')} RAM={os.environ.get('VPS_RAM','512')}MB")
     async with websockets.serve(
-        shell_handler,
-        "0.0.0.0",
-        5000,
+        shell_handler, "0.0.0.0", 5000,
         ping_interval=30,
         ping_timeout=60,
-        max_size=10 * 1024 * 1024,  # 10 MB max message size
+        max_size=10 * 1024 * 1024,
     ):
-        print("[BugVPS] Ready.")
-        await asyncio.Future()  # run forever
+        print("[AbsoraCloud] Ready.")
+        await asyncio.Future()
 
 
 if __name__ == "__main__":
