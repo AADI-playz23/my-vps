@@ -9,121 +9,74 @@ permissions:
 jobs:
   execute:
     runs-on: ubuntu-latest
+    env:
+      VPS_PLAN:    ${{ github.event.client_payload.plan }}
+      VPS_CPU:     ${{ github.event.client_payload.cpu_cores }}
+      VPS_RAM:     ${{ github.event.client_payload.ram_mb }}
+      VPS_SESSION: ${{ github.event.client_payload.session_secs }}
+      VPS_FM:      ${{ github.event.client_payload.file_manager }}
+      VPS_STORAGE: ${{ github.event.client_payload.storage_mb }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Write Guacamole Config
+      - name: Setup & Tunnel
         run: |
-          mkdir -p /tmp/guac
-          printf '%s\n' \
-            '<user-mapping>' \
-            '  <authorize username="absoracloud" password="absoracloud">' \
-            '    <connection name="AbsoraCloud Desktop">' \
-            '      <protocol>rdp</protocol>' \
-            '      <param name="hostname">127.0.0.1</param>' \
-            '      <param name="port">3389</param>' \
-            '      <param name="username">vpsuser</param>' \
-            '      <param name="password">absoracloud</param>' \
-            '      <param name="ignore-cert">true</param>' \
-            '      <param name="security">any</param>' \
-            '      <param name="width">1280</param>' \
-            '      <param name="height">800</param>' \
-            '      <param name="color-depth">16</param>' \
-            '      <param name="enable-wallpaper">false</param>' \
-            '    </connection>' \
-            '  </authorize>' \
-            '</user-mapping>' \
-            > /tmp/guac/user-mapping.xml
-          printf '%s\n' \
-            'guacd-hostname: 127.0.0.1' \
-            'guacd-port: 4822' \
-            'auth-provider: net.sourceforge.guacamole.net.basic.BasicFileAuthenticationProvider' \
-            'basic-user-mapping: /etc/guacamole/user-mapping.xml' \
-            > /tmp/guac/guacamole.properties
-          echo "Config files written."
-          cat /tmp/guac/user-mapping.xml
+          echo "Plan    : $VPS_PLAN"
+          echo "CPU     : $VPS_CPU cores"
+          echo "RAM     : $VPS_RAM MB"
+          echo "Session : $VPS_SESSION s"
+          echo "FM      : $VPS_FM"
+          echo "Storage : $VPS_STORAGE MB"
 
-      - name: Setup Terminal + Desktop + Tunnel
-        run: |
-          # ── 1. Python deps + Cloudflare ──────────────────────────
+          # ── 1. Python deps ────────────────────────────────────────
           pip install websockets psutil --quiet
+
+          # ── 2. Cloudflare tunnel ──────────────────────────────────
           curl -sL --output cloudflared.deb \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
 
-          # ── 2. XFCE4 + xrdp ──────────────────────────────────────
-          echo "Installing XFCE4 + xrdp..."
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            --no-install-recommends \
-            xfce4 xrdp dbus-x11 xterm xfonts-base
+          # ── 3. Apply plan resource limits via cgroups ─────────────
+          # Limit RAM using systemd-run if available
+          RAM_BYTES=$(( VPS_RAM * 1024 * 1024 ))
+          echo "Applying RAM limit: ${VPS_RAM}MB"
+          # We use ulimit for a best-effort cap (GitHub Actions doesn't allow cgroup writes)
+          ulimit -v $(( VPS_RAM * 1024 )) 2>/dev/null || true
 
-          echo "startxfce4" | sudo tee /etc/skel/.xsession > /dev/null
-          echo "startxfce4" > ~/.xsession
-          sudo chmod +x ~/.xsession
-
-          sudo useradd -m -s /bin/bash vpsuser 2>/dev/null || true
-          echo "vpsuser:absoracloud" | sudo chpasswd
-          echo "runner:absoracloud"  | sudo chpasswd 2>/dev/null || true
-
-          sudo adduser xrdp ssl-cert 2>/dev/null || true
-          sudo service xrdp restart
-          sleep 3
-          echo "xrdp status: $(sudo service xrdp status | grep -i active)"
-
-          # ── 3. Docker + Guacamole ─────────────────────────────────
-          echo "Installing Docker..."
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends docker.io
-          sudo systemctl start docker
-          sleep 5
-
-          sudo docker run -d --name guacd --network host guacamole/guacd
-
-          sudo docker run -d \
-            --name guacamole \
-            --network host \
-            -e GUACD_HOSTNAME=127.0.0.1 \
-            -e GUACD_PORT=4822 \
-            -e GUACAMOLE_HOME=/etc/guacamole \
-            -v /tmp/guac:/etc/guacamole:ro \
-            guacamole/guacamole
-
-          echo "Waiting for Guacamole to boot..."
-          sleep 30
-          curl -s http://localhost:8080/guacamole/ | grep -q "guacamole" \
-            && echo "Guacamole OK" \
-            || echo "Guacamole still starting..."
-
-          # ── 4. WebSocket Terminal Server ──────────────────────────
+          # ── 4. Start WebSocket terminal server ────────────────────
           python3 server.py &
+
           echo "Waiting for WS server on :5000..."
           for i in $(seq 1 20); do
-            nc -z localhost 5000 2>/dev/null && echo "WS server ready!" && break
+            nc -z localhost 5000 2>/dev/null && echo "Server ready!" && break
             sleep 1
           done
 
-          # ── 5. Two Cloudflare Tunnels ─────────────────────────────
-          cloudflared tunnel --url http://localhost:5000 > /tmp/tunnel_ws.log 2>&1 &
-          cloudflared tunnel --url http://localhost:8080 > /tmp/tunnel_guac.log 2>&1 &
-          echo "Waiting for tunnel URLs..."
-          sleep 15
+          # ── 5. Cloudflare tunnel ──────────────────────────────────
+          cloudflared tunnel --url http://localhost:5000 > /tmp/tunnel.log 2>&1 &
 
-          WS_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare.com' /tmp/tunnel_ws.log | head -1)
-          GUAC_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare.com' /tmp/tunnel_guac.log | head -1)
-          echo "WS Terminal  : $WS_URL"
-          echo "Desktop (RDP): $GUAC_URL"
+          echo "Waiting for tunnel URL..."
+          sleep 10
 
-          # ── 6. Save URLs to repo ──────────────────────────────────
+          TUNNEL_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare.com' /tmp/tunnel.log | head -1)
+          echo "Tunnel URL: $TUNNEL_URL"
+
+          # ── 6. Save URL to repo ───────────────────────────────────
           SESSION_ID="${{ github.event.client_payload.session_id }}"
+
           git config --global user.name  "AbsoraCloud-Bot"
           git config --global user.email "bot@absoracloud.local"
+
           mkdir -p sessions
-          printf "%s\n%s" "$WS_URL" "$GUAC_URL" > sessions/$SESSION_ID
+          echo "$TUNNEL_URL" > sessions/$SESSION_ID
+
           git pull
           git add sessions/$SESSION_ID
-          git commit -m "Active Session: $SESSION_ID"
+          git commit -m "Session: $SESSION_ID [$VPS_PLAN]"
           git push
-          echo "Session live!"
 
-          # ── 7. Keep Alive (6 hours) ───────────────────────────────
-          sleep 21600
+          echo "Session live: $TUNNEL_URL"
+
+          # ── 7. Keep alive for session duration ────────────────────
+          sleep $VPS_SESSION
