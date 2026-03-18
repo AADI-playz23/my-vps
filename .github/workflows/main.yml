@@ -4,47 +4,129 @@ on:
     types: [run-code]
 
 permissions:
-  contents: write # REQUIRED to save the URL file
+  contents: write
 
 jobs:
   execute:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup & Tunnel
+
+      - name: Setup Terminal + Desktop + Tunnel
         run: |
-          # 1. Install Tools
+          # ── 1. Install Tools ──────────────────────────────────────
           pip install websockets psutil --quiet
-          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+
+          curl -sL --output cloudflared.deb \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
-          
-          # 2. Start Server
+
+          # ── 2. Install XFCE4 Desktop + xrdp ──────────────────────
+          echo "Installing XFCE4 + xrdp..."
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            xfce4 xfce4-goodies xrdp dbus-x11 x11-xserver-utils \
+            xfonts-base xfonts-75dpi xfonts-100dpi
+
+          echo "startxfce4" | sudo tee /etc/skel/.xsession > /dev/null
+          echo "startxfce4" > ~/.xsession
+          sudo chmod +x ~/.xsession
+
+          echo "runner:bugvps123" | sudo chpasswd 2>/dev/null || true
+          echo "root:bugvps123"   | sudo chpasswd 2>/dev/null || true
+
+          sudo service xrdp start
+          echo "xrdp started on :3389"
+
+          # ── 3. Install Guacamole (RDP-in-browser via Docker) ──────
+          sudo apt-get install -y -qq docker.io
+          sudo systemctl start docker
+
+          mkdir -p /tmp/guac
+
+          cat > /tmp/guac/user-mapping.xml <<'GUACEOF'
+          <user-mapping>
+            <authorize username="bugvps" password="bugvps123">
+              <connection name="Linux Desktop">
+                <protocol>rdp</protocol>
+                <param name="hostname">127.0.0.1</param>
+                <param name="port">3389</param>
+                <param name="username">runner</param>
+                <param name="password">bugvps123</param>
+                <param name="ignore-cert">true</param>
+                <param name="security">any</param>
+                <param name="width">1280</param>
+                <param name="height">720</param>
+                <param name="color-depth">16</param>
+              </connection>
+            </authorize>
+          </user-mapping>
+          GUACEOF
+
+          mkdir -p /tmp/guac/guacamole
+          cp /tmp/guac/user-mapping.xml /tmp/guac/guacamole/user-mapping.xml
+
+          cat > /tmp/guac/guacamole/guacamole.properties <<'PROPEOF'
+          guacd-hostname: 127.0.0.1
+          guacd-port: 4822
+          auth-provider: net.sourceforge.guacamole.net.basic.BasicFileAuthenticationProvider
+          basic-user-mapping: /etc/guacamole/user-mapping.xml
+          PROPEOF
+
+          sudo docker run -d --name guacd --network host guacamole/guacd
+
+          sudo docker run -d --name guacamole \
+            --network host \
+            -e GUACD_HOSTNAME=127.0.0.1 \
+            -e GUACD_PORT=4822 \
+            -e GUACAMOLE_HOME=/etc/guacamole \
+            -v /tmp/guac/guacamole:/etc/guacamole:ro \
+            -p 8080:8080 \
+            guacamole/guacamole
+
+          echo "Waiting for Guacamole to boot..."
+          sleep 25
+
+          # ── 4. Start WebSocket Terminal Server ────────────────────
           python3 server.py &
-          
-          # 3. Start Cloudflare Tunnel
-          cloudflared tunnel --url http://localhost:5000 > tunnel.log 2>&1 &
-          
-          echo "Waiting for Tunnel..."
-          sleep 8
-          
-          # 4. Extract URL
-          TUNNEL_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1)
-          echo "Generated URL: $TUNNEL_URL"
-          
-          # 5. SAVE URL TO GIT REPO (The "Dead Drop")
+
+          echo "Waiting for WebSocket server on :5000..."
+          for i in $(seq 1 20); do
+            nc -z localhost 5000 2>/dev/null && echo "WS server ready!" && break
+            sleep 1
+          done
+
+          # ── 5. Cloudflare Tunnel (WS Terminal on :5000) ───────────
+          cloudflared tunnel --url http://localhost:5000 > /tmp/tunnel_ws.log 2>&1 &
+
+          # Also expose Guacamole on a second tunnel (port 8080)
+          cloudflared tunnel --url http://localhost:8080 > /tmp/tunnel_guac.log 2>&1 &
+
+          echo "Waiting for tunnels..."
+          sleep 12
+
+          WS_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare.com' /tmp/tunnel_ws.log | head -1)
+          GUAC_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare.com' /tmp/tunnel_guac.log | head -1)
+
+          echo "WS Terminal URL : $WS_URL"
+          echo "Guacamole URL   : $GUAC_URL"
+
+          # ── 6. Save URLs to repo ───────────────────────────────────
           SESSION_ID="${{ github.event.client_payload.session_id }}"
-          
-          git config --global user.name "VPS-Bot"
+
+          git config --global user.name  "VPS-Bot"
           git config --global user.email "bot@bugvps.local"
-          
+
           mkdir -p sessions
-          echo "$TUNNEL_URL" > sessions/$SESSION_ID
-          
+          # Store both URLs: line1=ws_url, line2=guac_url
+          printf "%s\n%s" "$WS_URL" "$GUAC_URL" > sessions/$SESSION_ID
+
           git pull
           git add sessions/$SESSION_ID
           git commit -m "Active Session: $SESSION_ID"
           git push
-          
-          # 6. Keep Alive
+
+          echo "Session live!"
+
+          # ── 7. Keep Alive ─────────────────────────────────────────
           sleep 21600
