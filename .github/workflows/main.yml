@@ -12,87 +12,73 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Write Guacamole Config
+        run: |
+          mkdir -p /tmp/guac
+          printf '%s\n' \
+            '<user-mapping>' \
+            '  <authorize username="absoracloud" password="absoracloud">' \
+            '    <connection name="AbsoraCloud Desktop">' \
+            '      <protocol>rdp</protocol>' \
+            '      <param name="hostname">127.0.0.1</param>' \
+            '      <param name="port">3389</param>' \
+            '      <param name="username">vpsuser</param>' \
+            '      <param name="password">absoracloud</param>' \
+            '      <param name="ignore-cert">true</param>' \
+            '      <param name="security">any</param>' \
+            '      <param name="width">1280</param>' \
+            '      <param name="height">800</param>' \
+            '      <param name="color-depth">16</param>' \
+            '      <param name="enable-wallpaper">false</param>' \
+            '    </connection>' \
+            '  </authorize>' \
+            '</user-mapping>' \
+            > /tmp/guac/user-mapping.xml
+          printf '%s\n' \
+            'guacd-hostname: 127.0.0.1' \
+            'guacd-port: 4822' \
+            'auth-provider: net.sourceforge.guacamole.net.basic.BasicFileAuthenticationProvider' \
+            'basic-user-mapping: /etc/guacamole/user-mapping.xml' \
+            > /tmp/guac/guacamole.properties
+          echo "Config files written."
+          cat /tmp/guac/user-mapping.xml
+
       - name: Setup Terminal + Desktop + Tunnel
         run: |
-          # ── 1. Install Python deps + Cloudflare tunnel ────────────
+          # ── 1. Python deps + Cloudflare ──────────────────────────
           pip install websockets psutil --quiet
-
           curl -sL --output cloudflared.deb \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
 
-          # ── 2. Install XFCE4 + xrdp (minimal, no goodies) ────────
+          # ── 2. XFCE4 + xrdp ──────────────────────────────────────
           echo "Installing XFCE4 + xrdp..."
           sudo apt-get update -qq
-
-          # Install only core XFCE4 — xfce4-goodies causes held-package conflicts
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            xfce4 \
-            xrdp \
-            dbus-x11 \
-            xterm \
-            xfonts-base \
-            --no-install-recommends
+            --no-install-recommends \
+            xfce4 xrdp dbus-x11 xterm xfonts-base
 
-          # Tell xrdp to launch XFCE for every session
           echo "startxfce4" | sudo tee /etc/skel/.xsession > /dev/null
           echo "startxfce4" > ~/.xsession
           sudo chmod +x ~/.xsession
 
-          # Create a usable user with a known password for RDP login
           sudo useradd -m -s /bin/bash vpsuser 2>/dev/null || true
           echo "vpsuser:absoracloud" | sudo chpasswd
           echo "runner:absoracloud"  | sudo chpasswd 2>/dev/null || true
 
-          # Fix xrdp ssl cert permissions and start
           sudo adduser xrdp ssl-cert 2>/dev/null || true
           sudo service xrdp restart
           sleep 3
-          echo "xrdp status: $(sudo service xrdp status | grep Active)"
+          echo "xrdp status: $(sudo service xrdp status | grep -i active)"
 
-          # ── 3. Guacamole via Docker (RDP → browser) ───────────────
-          echo "Starting Docker..."
-          sudo apt-get install -y docker.io --no-install-recommends
+          # ── 3. Docker + Guacamole ─────────────────────────────────
+          echo "Installing Docker..."
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends docker.io
           sudo systemctl start docker
           sleep 5
 
-          # Guacamole config dir
-          mkdir -p /tmp/guac
+          sudo docker run -d --name guacd --network host guacamole/guacd
 
-          cat > /tmp/guac/user-mapping.xml <<'GUACEOF'
-<user-mapping>
-  <authorize username="absoracloud" password="absoracloud">
-    <connection name="AbsoraCloud Desktop">
-      <protocol>rdp</protocol>
-      <param name="hostname">127.0.0.1</param>
-      <param name="port">3389</param>
-      <param name="username">vpsuser</param>
-      <param name="password">absoracloud</param>
-      <param name="ignore-cert">true</param>
-      <param name="security">any</param>
-      <param name="width">1280</param>
-      <param name="height">800</param>
-      <param name="color-depth">16</param>
-      <param name="enable-wallpaper">false</param>
-    </connection>
-  </authorize>
-</user-mapping>
-GUACEOF
-
-          cat > /tmp/guac/guacamole.properties <<'PROPEOF'
-guacd-hostname: 127.0.0.1
-guacd-port: 4822
-auth-provider: net.sourceforge.guacamole.net.basic.BasicFileAuthenticationProvider
-basic-user-mapping: /etc/guacamole/user-mapping.xml
-PROPEOF
-
-          # Start guacd (the RDP proxy daemon)
-          sudo docker run -d \
-            --name guacd \
-            --network host \
-            guacamole/guacd
-
-          # Start Guacamole web UI
           sudo docker run -d \
             --name guacamole \
             --network host \
@@ -104,50 +90,39 @@ PROPEOF
 
           echo "Waiting for Guacamole to boot..."
           sleep 30
-
-          # Verify guacamole is up
           curl -s http://localhost:8080/guacamole/ | grep -q "guacamole" \
             && echo "Guacamole OK" \
-            || echo "Guacamole not responding yet (may still be starting)"
+            || echo "Guacamole still starting..."
 
-          # ── 4. Start WebSocket Terminal Server ────────────────────
+          # ── 4. WebSocket Terminal Server ──────────────────────────
           python3 server.py &
-
           echo "Waiting for WS server on :5000..."
           for i in $(seq 1 20); do
             nc -z localhost 5000 2>/dev/null && echo "WS server ready!" && break
             sleep 1
           done
 
-          # ── 5. Two Cloudflare tunnels ─────────────────────────────
-          # Tunnel A: WebSocket terminal (port 5000)
+          # ── 5. Two Cloudflare Tunnels ─────────────────────────────
           cloudflared tunnel --url http://localhost:5000 > /tmp/tunnel_ws.log 2>&1 &
-          # Tunnel B: Guacamole desktop UI (port 8080)
           cloudflared tunnel --url http://localhost:8080 > /tmp/tunnel_guac.log 2>&1 &
-
           echo "Waiting for tunnel URLs..."
           sleep 15
 
           WS_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare.com' /tmp/tunnel_ws.log | head -1)
           GUAC_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare.com' /tmp/tunnel_guac.log | head -1)
-
           echo "WS Terminal  : $WS_URL"
           echo "Desktop (RDP): $GUAC_URL"
 
-          # ── 6. Save both URLs to repo ─────────────────────────────
+          # ── 6. Save URLs to repo ──────────────────────────────────
           SESSION_ID="${{ github.event.client_payload.session_id }}"
-
           git config --global user.name  "AbsoraCloud-Bot"
           git config --global user.email "bot@absoracloud.local"
-
           mkdir -p sessions
           printf "%s\n%s" "$WS_URL" "$GUAC_URL" > sessions/$SESSION_ID
-
           git pull
           git add sessions/$SESSION_ID
           git commit -m "Active Session: $SESSION_ID"
           git push
-
           echo "Session live!"
 
           # ── 7. Keep Alive (6 hours) ───────────────────────────────
