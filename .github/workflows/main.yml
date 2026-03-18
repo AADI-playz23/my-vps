@@ -1,0 +1,50 @@
+name: BugVPS-Auto
+on:
+  repository_dispatch:
+    types: [run-code]
+
+permissions:
+  contents: write # REQUIRED to save the URL file
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup & Tunnel
+        run: |
+          # 1. Install Tools
+          pip install websockets psutil --quiet
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+          
+          # 2. Start Server
+          python3 server.py &
+          
+          # 3. Start Cloudflare Tunnel
+          cloudflared tunnel --url http://localhost:5000 > tunnel.log 2>&1 &
+          
+          echo "Waiting for Tunnel..."
+          sleep 8
+          
+          # 4. Extract URL
+          TUNNEL_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare.com' tunnel.log | head -n 1)
+          echo "Generated URL: $TUNNEL_URL"
+          
+          # 5. SAVE URL TO GIT REPO (The "Dead Drop")
+          SESSION_ID="${{ github.event.client_payload.session_id }}"
+          
+          git config --global user.name "VPS-Bot"
+          git config --global user.email "bot@bugvps.local"
+          
+          mkdir -p sessions
+          echo "$TUNNEL_URL" > sessions/$SESSION_ID
+          
+          git pull
+          git add sessions/$SESSION_ID
+          git commit -m "Active Session: $SESSION_ID"
+          git push
+          
+          # 6. Keep Alive
+          sleep 21600
