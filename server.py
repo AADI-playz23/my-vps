@@ -3,6 +3,7 @@ import websockets
 import json
 import os
 import sys
+import http
 import psutil
 
 COMMAND_TIMEOUT = 60
@@ -14,7 +15,7 @@ async def shell_handler(websocket):
 
     # Read plan limits from env (set by main.yml)
     plan       = os.environ.get('VPS_PLAN',       'free')
-    cpu_cores  = int(os.environ.get('VPS_CPU',    '1'))
+    cpu_cores  = float(os.environ.get('VPS_CPU',  '1'))
     ram_mb     = int(os.environ.get('VPS_RAM',    '512'))
     fm_enabled = os.environ.get('VPS_FM',         'false').lower() == 'true'
     storage_mb = int(os.environ.get('VPS_STORAGE','0'))
@@ -191,6 +192,17 @@ async def send(websocket, text):
         await websocket.send(json.dumps({"type": "terminal", "data": text}))
 
 
+from websockets.http11 import Response
+from websockets.datastructures import Headers
+
+def health_check(connection, request):
+    # Cloudflare and load balancers send plain HTTP GET health checks.
+    # Return a 200 so they don't flood the logs with errors.
+    upgrade = request.headers.get("Upgrade", "").lower()
+    if upgrade != "websocket":
+        headers = Headers([("Content-Type", "text/plain"), ("Content-Length", "2")])
+        return connection.respond(http.HTTPStatus.OK, headers, b"OK")
+
 async def main():
     print(f"[AbsoraCloud] WS shell server starting on 0.0.0.0:5000")
     print(f"[AbsoraCloud] Plan={os.environ.get('VPS_PLAN','free')} CPU={os.environ.get('VPS_CPU','1')} RAM={os.environ.get('VPS_RAM','512')}MB")
@@ -199,6 +211,7 @@ async def main():
         ping_interval=30,
         ping_timeout=60,
         max_size=10 * 1024 * 1024,
+        process_request=health_check,
     ):
         print("[AbsoraCloud] Ready.")
         await asyncio.Future()
