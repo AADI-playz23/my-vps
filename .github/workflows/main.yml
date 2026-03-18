@@ -24,9 +24,10 @@ jobs:
           # ── 2. Install XFCE4 Desktop + xrdp ──────────────────────
           echo "Installing XFCE4 + xrdp..."
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            xfce4 xfce4-goodies xrdp dbus-x11 x11-xserver-utils \
-            xfonts-base xfonts-75dpi xfonts-100dpi
+          sudo apt-get -f install -y -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --fix-broken \
+            xfce4 xrdp dbus-x11 x11-xserver-utils \
+            xfonts-base xterm
 
           echo "startxfce4" | sudo tee /etc/skel/.xsession > /dev/null
           echo "startxfce4" > ~/.xsession
