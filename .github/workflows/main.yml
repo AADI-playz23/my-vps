@@ -16,6 +16,8 @@ jobs:
       VPS_SESSION: ${{ github.event.client_payload.session_secs }}
       VPS_FM:      ${{ github.event.client_payload.file_manager }}
       VPS_STORAGE: ${{ github.event.client_payload.storage_mb }}
+      SESSION_ID:  ${{ github.event.client_payload.session_id }}
+      USER_ID:     ${{ github.event.client_payload.user_id }}
 
     steps:
       - uses: actions/checkout@v4
@@ -28,20 +30,17 @@ jobs:
           echo "Session : $VPS_SESSION s"
           echo "FM      : $VPS_FM"
           echo "Storage : $VPS_STORAGE MB"
+          echo "SlotID  : $SESSION_ID"
 
           # ── 1. Python deps ────────────────────────────────────────
           pip install websockets psutil --quiet
 
-          # ── 2. Cloudflare tunnel ──────────────────────────────────
+          # ── 2. Install Cloudflare tunnel ──────────────────────────
           curl -sL --output cloudflared.deb \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
 
-          # ── 3. Apply plan resource limits via cgroups ─────────────
-          # Limit RAM using systemd-run if available
-          RAM_BYTES=$(( VPS_RAM * 1024 * 1024 ))
-          echo "Applying RAM limit: ${VPS_RAM}MB"
-          # We use ulimit for a best-effort cap (GitHub Actions doesn't allow cgroup writes)
+          # ── 3. Apply plan resource limits ─────────────────────────
           ulimit -v $(( VPS_RAM * 1024 )) 2>/dev/null || true
 
           # ── 4. Start WebSocket terminal server ────────────────────
@@ -53,7 +52,7 @@ jobs:
             sleep 1
           done
 
-          # ── 5. Cloudflare tunnel ──────────────────────────────────
+          # ── 5. Start Cloudflare tunnel ────────────────────────────
           cloudflared tunnel --url http://localhost:5000 > /tmp/tunnel.log 2>&1 &
 
           echo "Waiting for tunnel URL..."
@@ -62,21 +61,32 @@ jobs:
           TUNNEL_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare.com' /tmp/tunnel.log | head -1)
           echo "Tunnel URL: $TUNNEL_URL"
 
-          # ── 6. Save URL to repo ───────────────────────────────────
-          SESSION_ID="${{ github.event.client_payload.session_id }}"
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "ERROR: Could not get tunnel URL"
+            exit 1
+          fi
 
+          # ── 6. Save URL to repo (frontend polls this) ─────────────
           git config --global user.name  "AbsoraCloud-Bot"
           git config --global user.email "bot@absoracloud.local"
 
           mkdir -p sessions
           echo "$TUNNEL_URL" > sessions/$SESSION_ID
 
-          git pull
+          git pull --rebase
           git add sessions/$SESSION_ID
-          git commit -m "Session: $SESSION_ID [$VPS_PLAN]"
+          git commit -m "Session live: $SESSION_ID [$VPS_PLAN]"
           git push
 
           echo "Session live: $TUNNEL_URL"
 
           # ── 7. Keep alive for session duration ────────────────────
           sleep $VPS_SESSION
+
+          # ── 8. Cleanup session file from repo ─────────────────────
+          git pull --rebase
+          git rm --ignore-unmatch sessions/$SESSION_ID
+          git commit -m "Session ended: $SESSION_ID" || true
+          git push || true
+
+          echo "Session $SESSION_ID ended."
