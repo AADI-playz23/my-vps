@@ -167,8 +167,19 @@ async def heartbeat_loop():
 
 async def queue_processor():
     """Check the priority queue and accept sessions if we have capacity."""
+    global TUNNEL_URL
     while True:
         try:
+            # DO NOT process queue if we don't know our tunnel URL yet!
+            if not TUNNEL_URL:
+                runner_data = redis_get_json(f"runner:{RUNNER_ID}")
+                if runner_data and runner_data.get('tunnel_url'):
+                    TUNNEL_URL = runner_data['tunnel_url']
+                    print(f"[Runner] Tunnel URL discovered for queue: {TUNNEL_URL}")
+                else:
+                    await asyncio.sleep(3)
+                    continue
+
             free_cpu = RUNNER_TOTAL_CPU - used_cpu
             free_ram = RUNNER_TOTAL_RAM - used_ram
 
