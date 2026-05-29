@@ -641,13 +641,15 @@ async def send(websocket, text):
             pass
 
 
-from websockets.http11 import Response
-from websockets.datastructures import Headers
-
-
 def health_check(connection, request):
+    """Handle non-WebSocket HTTP requests (Cloudflare health checks, etc.)."""
+    # request may be None for bare TCP connections (Cloudflare probes)
+    if request is None:
+        return
+
     upgrade = request.headers.get("Upgrade", "").lower()
     if upgrade != "websocket":
+        # websockets 13+: respond(status, text) — only 2 args
         body = json.dumps({
             "status":   "ok",
             "runner":   RUNNER_ID,
@@ -656,19 +658,20 @@ def health_check(connection, request):
             "used_ram": used_ram,
             "free_cpu": RUNNER_TOTAL_CPU - used_cpu,
             "free_ram": RUNNER_TOTAL_RAM - used_ram,
-        }).encode()
-        headers = Headers([
-            ("Content-Type", "application/json"),
-            ("Content-Length", str(len(body))),
-        ])
-        return connection.respond(http.HTTPStatus.OK, headers, body)
+        })
+        return connection.respond(http.HTTPStatus.OK, body + "\n")
 
 
 # ═══════════════════════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════════════════════
 
+import logging
+
 async def main():
+    # Suppress noisy websockets handshake errors (Cloudflare probes)
+    logging.getLogger("websockets").setLevel(logging.ERROR)
+
     print(f"[AbsoraCloud] Universal Shared Server")
     print(f"[AbsoraCloud] Runner={RUNNER_ID}")
     print(f"[AbsoraCloud] Capacity: {RUNNER_TOTAL_CPU} CPU, {RUNNER_TOTAL_RAM}MB RAM")
@@ -693,3 +696,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
