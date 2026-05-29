@@ -1,0 +1,154 @@
+name: AbsoraCloud-Shared
+on:
+  repository_dispatch:
+    types: [run-shared]
+
+permissions:
+  contents: write
+
+jobs:
+  shared-runner:
+    runs-on: ubuntu-latest
+    env:
+      UPSTASH_URL:   ${{ secrets.UPSTASH_URL }}
+      UPSTASH_TOKEN: ${{ secrets.UPSTASH_TOKEN }}
+      RUNNER_ID:     "runner-${{ github.run_id }}"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Environment
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo "  AbsoraCloud Universal Shared Runner"
+          echo "  Serves ALL plans: free/basic/pro/enterprise"
+          echo "  Runner ID : $RUNNER_ID"
+          echo "  Capacity  : 4 vCPU, 16 GB RAM"
+          echo "═══════════════════════════════════════════"
+
+          # ── 1. Python deps ────────────────────────────────────
+          pip install websockets psutil --quiet
+
+          # ── 2. Install Cloudflare tunnel ──────────────────────
+          curl -sL --output cloudflared.deb \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
+
+          # ── 3. Build base Docker image (built once per runner) ─
+          echo "Building base Docker image..."
+          cat > /tmp/Dockerfile <<'DOCKERFILE'
+          FROM ubuntu:22.04
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+              bash curl wget git nano vim \
+              python3 python3-pip \
+              nodejs npm \
+              gcc g++ make \
+              net-tools iputils-ping dnsutils \
+              ca-certificates \
+              && rm -rf /var/lib/apt/lists/*
+          RUN mkdir -p /root/files
+          WORKDIR /root
+          CMD ["sleep", "infinity"]
+          DOCKERFILE
+          docker build -t absoracloud-base -f /tmp/Dockerfile /tmp
+
+      - name: Start Shared Server
+        run: |
+          # ── 4. Start the multi-tenant WebSocket server ────────
+          python3 shared_server.py &
+          SERVER_PID=$!
+
+          echo "Waiting for WS server on :5000..."
+          for i in $(seq 1 30); do
+            nc -z localhost 5000 2>/dev/null && echo "Server ready!" && break
+            sleep 1
+          done
+
+          if ! nc -z localhost 5000 2>/dev/null; then
+            echo "ERROR: Server failed to start"
+            exit 1
+          fi
+
+          # ── 5. Start Cloudflare tunnel ────────────────────────
+          cloudflared tunnel --url http://localhost:5000 > /tmp/tunnel.log 2>&1 &
+
+          echo "Waiting for tunnel URL..."
+          TUNNEL_URL=""
+          for i in $(seq 1 30); do
+            TUNNEL_URL=$(grep -o 'https://[-0-9a-z]*\.trycloudflare.com' /tmp/tunnel.log | head -1)
+            if [ -n "$TUNNEL_URL" ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          echo "Tunnel URL: $TUNNEL_URL"
+
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "ERROR: Could not get tunnel URL"
+            exit 1
+          fi
+
+          # ── 6. Update runner in Redis with tunnel URL ─────────
+          export TUNNEL_URL
+          python3 -c "
+          import json, urllib.request, os
+          url   = os.environ['UPSTASH_URL']
+          token = os.environ['UPSTASH_TOKEN']
+          rid   = os.environ['RUNNER_ID']
+          turl  = os.environ['TUNNEL_URL']
+
+          # Get current runner data
+          req = urllib.request.Request(url, json.dumps(['GET', f'runner:{rid}']).encode(),
+              {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}, method='POST')
+          with urllib.request.urlopen(req) as r:
+              runner = json.loads(json.loads(r.read())['result'])
+
+          # Update tunnel URL
+          runner['tunnel_url'] = turl
+          req = urllib.request.Request(url, json.dumps(['SET', f'runner:{rid}', json.dumps(runner), 'EX', '21600']).encode(),
+              {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}, method='POST')
+          urllib.request.urlopen(req)
+
+          # Also update all queued sessions assigned to this runner
+          # (so check_session.php can return the URL)
+          print(f'Runner {rid} updated with tunnel: {turl}')
+          "
+
+          echo "═══════════════════════════════════════════"
+          echo "  UNIVERSAL RUNNER LIVE"
+          echo "  Runner:   $RUNNER_ID"
+          echo "  Tunnel:   $TUNNEL_URL"
+          echo "  Capacity: 4 CPU, 16 GB RAM (mixed plans)"
+          echo "  Max 3 runners system-wide"
+          echo "═══════════════════════════════════════════"
+
+          # ── 7. Keep alive for 6 hours (max GH Actions) ────────
+          sleep 21600
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "Cleaning up..."
+
+          # Stop all Docker containers for this runner
+          docker ps --filter "name=vps-" -q | xargs -r docker rm -f 2>/dev/null || true
+
+          # Deregister from Redis
+          python3 -c "
+          import json, urllib.request, os
+          url   = os.environ.get('UPSTASH_URL','')
+          token = os.environ.get('UPSTASH_TOKEN','')
+          rid   = os.environ.get('RUNNER_ID','')
+          if url and token and rid:
+              for key in [f'runner:{rid}', f'heartbeat:{rid}']:
+                  try:
+                      req = urllib.request.Request(url, json.dumps(['DEL', key]).encode(),
+                          {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}, method='POST')
+                      urllib.request.urlopen(req)
+                  except: pass
+              print(f'Runner {rid} deregistered')
+          " || true
+
+          echo "Shared runner shutdown complete."
