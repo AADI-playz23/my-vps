@@ -206,7 +206,7 @@ async def queue_processor():
 
 
 # ═══════════════════════════════════════════════════════════════
-#  DOCKER CONTAINER MANAGEMENT
+#  DOCKER / BARE-METAL MANAGEMENT
 # ═══════════════════════════════════════════════════════════════
 
 async def run_cmd(cmd):
@@ -223,6 +223,20 @@ async def create_container(session_id, plan):
     global used_cpu, used_ram
     name = f"vps-{session_id}"
     spec = PLAN_SPECS.get(plan, PLAN_SPECS['free'])
+
+    # Bare-Metal Enterprise
+    if plan == 'enterprise':
+        # Check resources
+        if used_cpu + spec['cpu'] > RUNNER_TOTAL_CPU or used_ram + spec['ram'] > RUNNER_TOTAL_RAM:
+            print(f"[BareMetal] Not enough resources for enterprise")
+            return None
+        used_cpu += spec['cpu']
+        used_ram += spec['ram']
+        sync_runner_to_redis()
+        # Ensure bare-metal file dir exists
+        await run_cmd("mkdir -p /home/runner/files")
+        print(f"[BareMetal] Assigned: plan=enterprise | Total: {used_cpu}/{RUNNER_TOTAL_CPU} CPU, {used_ram}/{RUNNER_TOTAL_RAM} RAM")
+        return 'bare-metal'
 
     # Check if already exists (reconnection)
     out, _, rc = await run_cmd(f"docker inspect {name} 2>/dev/null")
@@ -262,21 +276,32 @@ async def create_container(session_id, plan):
 async def destroy_container(session_id):
     global used_cpu, used_ram
     name = f"vps-{session_id}"
+    plan = None
 
     # Free resources
     if session_id in sessions:
         sess = sessions[session_id]
+        plan = sess.get('plan')
         used_cpu = max(0, used_cpu - sess.get('cpu', 0))
         used_ram = max(0, used_ram - sess.get('ram', 0))
 
-    await run_cmd(f"docker rm -f {name} 2>/dev/null")
+    if plan != 'enterprise':
+        await run_cmd(f"docker rm -f {name} 2>/dev/null")
+        print(f"[Docker] Destroyed {name} | Total: {used_cpu}/{RUNNER_TOTAL_CPU} CPU, {used_ram}/{RUNNER_TOTAL_RAM} RAM")
+    else:
+        print(f"[BareMetal] Released resources for {session_id} | Total: {used_cpu}/{RUNNER_TOTAL_CPU} CPU, {used_ram}/{RUNNER_TOTAL_RAM} RAM")
+
     sync_runner_to_redis()
-    print(f"[Docker] Destroyed {name} | Total: {used_cpu}/{RUNNER_TOTAL_CPU} CPU, {used_ram}/{RUNNER_TOTAL_RAM} RAM")
 
 
 async def docker_exec_stream(container, cmd, cwd, websocket):
     escaped = cmd.replace("'", "'\\''")
-    full_cmd = f"docker exec -w '{cwd}' {container} bash -c '{escaped}'"
+    if container == 'bare-metal':
+        # Execute directly on host
+        full_cmd = f"cd '{cwd}' && bash -c '{escaped}'"
+    else:
+        full_cmd = f"docker exec -w '{cwd}' {container} bash -c '{escaped}'"
+
     try:
         proc = await asyncio.create_subprocess_shell(
             full_cmd,
@@ -309,6 +334,25 @@ async def docker_exec_stream(container, cmd, cwd, websocket):
 
 async def get_container_stats(container):
     try:
+        if container == 'bare-metal':
+            # Use host system stats
+            out, _, _ = await run_cmd("free -m | grep Mem | awk '{print $3}'")
+            try: mem_mb = float(out.strip())
+            except: mem_mb = 0
+
+            out, _, _ = await run_cmd("top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'")
+            try: cpu_pct = float(out.strip())
+            except: cpu_pct = 0
+
+            return {
+                'cpu':       round(cpu_pct, 1),
+                'ram':       min(100, int(mem_mb / 16384 * 100)),
+                'ram_mb':    round(mem_mb, 1),
+                'disk':      0,
+                'cpu_cores': 4,
+            }
+
+        # Docker stats
         out, _, rc = await run_cmd(
             f"docker stats --no-stream --format '{{{{.CPUPerc}}}} {{{{.MemUsage}}}}' {container}"
         )
@@ -356,14 +400,20 @@ async def get_container_stats(container):
 # ═══════════════════════════════════════════════════════════════
 
 async def fm_list(container, websocket):
-    out, _, rc = await run_cmd(f"docker exec {container} ls -1 /root/files 2>/dev/null")
+    if container == 'bare-metal':
+        out, _, rc = await run_cmd("ls -1 /home/runner/files 2>/dev/null")
+    else:
+        out, _, rc = await run_cmd(f"docker exec {container} ls -1 /root/files 2>/dev/null")
     files = sorted([f for f in out.strip().split('\n') if f]) if rc == 0 and out.strip() else []
     await websocket.send(json.dumps({"type": "file_list", "data": files}))
 
 
 async def fm_read(container, filename, websocket):
     safe_name = os.path.basename(filename)
-    out, _, rc = await run_cmd(f"docker exec {container} cat '/root/files/{safe_name}' 2>/dev/null")
+    if container == 'bare-metal':
+        out, _, rc = await run_cmd(f"cat '/home/runner/files/{safe_name}' 2>/dev/null")
+    else:
+        out, _, rc = await run_cmd(f"docker exec {container} cat '/root/files/{safe_name}' 2>/dev/null")
     content = out if rc == 0 else ""
     await websocket.send(json.dumps({
         "type": "file_content",
@@ -376,7 +426,11 @@ async def fm_write(container, filename, content, websocket, plan):
     spec = PLAN_SPECS.get(plan, PLAN_SPECS['free'])
     storage_limit = spec['storage'] * 1024 * 1024
 
-    out, _, _ = await run_cmd(f"docker exec {container} du -sb /root/files/ 2>/dev/null")
+    if container == 'bare-metal':
+        out, _, _ = await run_cmd("du -sb /home/runner/files/ 2>/dev/null")
+    else:
+        out, _, _ = await run_cmd(f"docker exec {container} du -sb /root/files/ 2>/dev/null")
+
     used_bytes = 0
     if out.strip():
         try:
@@ -392,9 +446,15 @@ async def fm_write(container, filename, content, websocket, plan):
     with tempfile.NamedTemporaryFile(mode='w', suffix=f'_{safe_name}', delete=False) as f:
         f.write(content)
         tmp_path = f.name
-    await run_cmd(f"docker cp '{tmp_path}' '{container}:/root/files/{safe_name}'")
-    os.unlink(tmp_path)
+        
+    if container == 'bare-metal':
+        await run_cmd(f"mv '{tmp_path}' '/home/runner/files/{safe_name}'")
+    else:
+        await run_cmd(f"docker cp '{tmp_path}' '{container}:/root/files/{safe_name}'")
+        os.unlink(tmp_path)
+        
     await send(websocket, f"File saved: {safe_name}\n")
+
 
 
 # ═══════════════════════════════════════════════════════════════
