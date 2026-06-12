@@ -600,8 +600,7 @@
 
 <script>
 const originalFetch = window.fetch;
-window.fetch = async function() {
-    let [resource, config] = arguments;
+window.fetch = async function(resource, config) {
     if(typeof resource === 'string' && resource.startsWith('/api')) {
         config = config || {};
         config.headers = config.headers || {};
@@ -609,9 +608,8 @@ window.fetch = async function() {
         if(token) {
             config.headers['Authorization'] = 'Bearer ' + token;
         }
-        arguments[1] = config;
     }
-    return originalFetch.apply(this, arguments);
+    return originalFetch.call(this, resource, config);
 };
 
 // ════════════════════════════ STATE ════════════════════════════
