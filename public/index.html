@@ -599,6 +599,21 @@
 </div>
 
 <script>
+const originalFetch = window.fetch;
+window.fetch = async function() {
+    let [resource, config] = arguments;
+    if(typeof resource === 'string' && resource.startsWith('/api')) {
+        config = config || {};
+        config.headers = config.headers || {};
+        const token = localStorage.getItem('auth_token');
+        if(token) {
+            config.headers['Authorization'] = 'Bearer ' + token;
+        }
+        arguments[1] = config;
+    }
+    return originalFetch.apply(this, arguments);
+};
+
 // ════════════════════════════ STATE ════════════════════════════
 const PLANS = {
     free:       {name:'Free',       price:0,    cpu:0.5, ram:2048,  session:3600,  slots:1,  fm:false, storage:100,  color:'#64748b'},
@@ -670,6 +685,7 @@ async function doLogin() {
         });
         const d = await r.json();
         if (d.status === 'success') {
+            localStorage.setItem('auth_token', d.token);
             currentUser = d.user;
             closeAuthModal();
             enterDashboard();
@@ -695,6 +711,7 @@ async function doRegister() {
         });
         const d = await r.json();
         if (d.status === 'success') {
+            localStorage.setItem('auth_token', d.token);
             currentUser = d.user;
             closeAuthModal();
             enterDashboard();
@@ -707,6 +724,7 @@ async function doRegister() {
 
 async function logoutUser() {
     await fetch('/api/auth', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'logout'})});
+    localStorage.removeItem('auth_token');
     // Close all slot sockets and timers
     slots.forEach((s, i) => {
         stopSlotMetrics(i);
