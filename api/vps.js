@@ -56,25 +56,36 @@ export default async function handler(req, res) {
 
       // Since the actual Upstash matching logic is complex, we queue them here for demonstration,
       // or directly use redisCmd to queue.
-      // We push a webhook to trigger github actions for runners.
-      const payload = {
-        event_type: "run-shared",
-        client_payload: { runner_number: 1 }
-      };
-      
-      const { GH_TOKEN, GH_OWNER, GH_REPO } = process.env;
-      const githubRes = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/dispatches`, {
-        method: 'POST',
-        headers: {
-          "Authorization": `token ${GH_TOKEN}`,
-          "User-Agent": "AbsoraCloud-Vercel",
-          "Accept": "application/vnd.github.v3+json",
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
-      });
+      // Find active runners
+      const runnerKeys = await redisCmd(['KEYS', 'runner:*']) || [];
+      let activeRunners = 0;
+      for (const key of runnerKeys) {
+        const runnerId = key.replace('runner:', '');
+        const heartbeat = await redisCmd(['EXISTS', `heartbeat:${runnerId}`]);
+        if (heartbeat === 1) activeRunners++;
+      }
 
-      const triggered = githubRes.ok;
+      let triggered = false;
+      if (activeRunners < 3) {
+        const payload = {
+          event_type: "run-shared",
+          client_payload: { runner_number: activeRunners + 1 }
+        };
+        const { GH_TOKEN, GH_OWNER, GH_REPO } = process.env;
+        const githubRes = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/dispatches`, {
+          method: 'POST',
+          headers: {
+            "Authorization": `token ${GH_TOKEN}`,
+            "User-Agent": "AbsoraCloud-Vercel",
+            "Accept": "application/vnd.github.v3+json",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+        triggered = githubRes.ok;
+      }
+
+      // The triggered variable is already declared above
 
       const sessionData = {
         status: 'queued',
