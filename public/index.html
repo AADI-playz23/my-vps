@@ -781,7 +781,7 @@ function initSlots() {
         slots.push({
             id: i,
             socket: null,
-            sessionId: sv ? sv.sessionId : ('u-' + Math.floor(Math.random()*100000)),
+            sessionId: sv ? sv.sessionId : ('u-' + crypto.randomUUID()),
             sessionExpiry: sv ? sv.sessionExpiry : null,
             tunnelUrl: sv ? sv.tunnelUrl : null,
             metricsTimer: null,
@@ -988,7 +988,7 @@ async function launchSlot(i) {
     if (s.status === 'live' || s.status === 'launching' || s.status === 'polling') return;
 
     s.status = 'launching';
-    s.sessionId = 'u-' + Math.floor(Math.random()*100000);
+    s.sessionId = 'u-' + crypto.randomUUID();
     s.sessionExpiry = null;
     s.tunnelUrl = null;
     updateSlotDot(i);
@@ -1054,9 +1054,13 @@ async function startSessionPolling(i) {
             return;
         }
         try {
-            const r = await fetch(`/api/vps?action=check_session?session_id=${s.sessionId}`);
+            // Bug 1 fixed: use & not ? for the second query parameter
+            const r = await fetch(`/api/vps?action=check_session&session_id=${s.sessionId}`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
+            });
             const d = await r.json();
-            if (d.status === 'ready' && d.tunnel_url) {
+            // Bug 2 fixed: backend returns 'active', not 'ready'
+            if (d.status === 'active' && d.tunnel_url) {
                 clearInterval(poll);
                 s.tunnelUrl = d.tunnel_url.replace('https://', 'wss://');
                 if (d.expires_at) s.sessionExpiry = d.expires_at * 1000;
@@ -1064,7 +1068,8 @@ async function startSessionPolling(i) {
                 logSlot(i, 'Runner ready — connecting...', 'text-green');
                 connectSlotWS(i, s.tunnelUrl, false);
             } else if (d.status === 'queued') {
-                if (attempts % 5 === 0) logSlot(i, 'Still waiting for runner...', 'text-dim');
+                const pos = d.queue_position || '?';
+                if (attempts % 5 === 0) logSlot(i, `Still waiting for runner... (queue position: ${pos})`, 'text-dim');
             }
         } catch(e) {}
     }, 3000);
@@ -1075,6 +1080,8 @@ function connectSlotWS(i, url, isReconnect) {
     const s = slots[i];
     s.tunnelUrl = url;
     s.status = isReconnect ? 'reconnecting' : 'polling';
+    // Reset retry delay on fresh connect (not reconnect)
+    if (!isReconnect) s.retryDelay = 1000;
     updateSlotDot(i);
     if (i === activeSlotIdx) { updateLaunchBtn(i); updateTopbarStatus(i); }
 
@@ -1085,6 +1092,10 @@ function connectSlotWS(i, url, isReconnect) {
     s.socket.onopen = () => {
         // ── Send auth handshake (identify session to shared server) ──
         s.socket.send(JSON.stringify({type:'auth', session_id: s.sessionId}));
+
+        // Reset exponential backoff on successful connect
+        s.retryDelay = 1000;
+        s.pongReceived = true;
 
         s.status = 'live';
         updateSlotDot(i);
@@ -1109,6 +1120,7 @@ function connectSlotWS(i, url, isReconnect) {
             logSlot(i, '[Reconnected] Session resumed.', 'text-green');
         }
         startSlotMetrics(i);
+        startHeartbeat(i);
     };
 
     s.socket.onmessage = (e) => {
@@ -1124,6 +1136,7 @@ function connectSlotWS(i, url, isReconnect) {
             else if (msg.type === 'metrics' && i === activeSlotIdx) updateMetrics(msg.data, i);
             else if (msg.type === 'file_list') renderFileList(msg.data);
             else if (msg.type === 'file_content') loadFileContent(msg.data);
+            else if (msg.type === '__pong__') { s.pongReceived = true; }
         } catch(_) {}
     };
 
@@ -1131,6 +1144,7 @@ function connectSlotWS(i, url, isReconnect) {
         const inp = document.getElementById(`slot-input-${i}`);
         if (inp) inp.disabled = true;
         stopSlotMetrics(i);
+        stopHeartbeat(i);
 
         // Code 4100 = explicit user kill — don't reconnect
         if (event.code === 4100) return;
@@ -1140,10 +1154,13 @@ function connectSlotWS(i, url, isReconnect) {
             s.status = 'reconnecting';
             updateSlotDot(i);
             if (i === activeSlotIdx) { updateLaunchBtn(i); updateTopbarStatus(i); }
-            logSlot(i, '\n[Connection lost] Reconnecting in 4s...', 'text-dim');
+            // Exponential backoff: 1s → 2s → 4s → ... → max 30s
+            if (!s.retryDelay) s.retryDelay = 1000;
+            logSlot(i, `\n[Connection lost] Reconnecting in ${s.retryDelay/1000}s...`, 'text-dim');
             setTimeout(() => {
                 if (s.sessionExpiry && Date.now() < s.sessionExpiry) connectSlotWS(i, s.tunnelUrl, true);
-            }, 4000);
+            }, s.retryDelay);
+            s.retryDelay = Math.min(s.retryDelay * 2, 30000);
         } else {
             s.status = 'idle';
             s.sessionExpiry = null;
@@ -1157,6 +1174,27 @@ function connectSlotWS(i, url, isReconnect) {
     };
 
     s.socket.onerror = () => logSlot(i, 'WebSocket error.', 'text-danger');
+}
+
+// ── Heartbeat ping/pong watchdog — detects dead sessions ──────────────────
+function startHeartbeat(i) {
+    stopHeartbeat(i);
+    const s = slots[i];
+    s.heartbeatTimer = setInterval(() => {
+        if (!s.socket || s.socket.readyState !== WebSocket.OPEN) return;
+        s.pongReceived = false;
+        s.socket.send(JSON.stringify({ cmd: '__ping__' }));
+        setTimeout(() => {
+            if (s && !s.pongReceived && s.status === 'live') {
+                logSlot(i, '[Heartbeat] No response — session may be lost. Reconnecting...', 'text-danger');
+                try { s.socket.close(); } catch(_) {}
+            }
+        }, 5000);
+    }, 20000);
+}
+function stopHeartbeat(i) {
+    const s = slots[i];
+    if (s?.heartbeatTimer) { clearInterval(s.heartbeatTimer); s.heartbeatTimer = null; }
 }
 
 function handleSlotEnter(e, i) {

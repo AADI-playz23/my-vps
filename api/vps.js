@@ -28,6 +28,10 @@ export default async function handler(req, res) {
     if (action === 'launch') {
       const sessionId = req.body.session_id;
       if (!sessionId) return res.status(400).json({ status: 'error', msg: 'Missing session_id' });
+      // Input sanitization: validate session_id format before touching Redis/D1
+      if (typeof sessionId !== 'string' || !/^[\w-]{5,72}$/.test(sessionId)) {
+        return res.status(400).json({ status: 'error', msg: 'Invalid session_id format' });
+      }
 
       const planKey = user.plan;
       const plan = plans[planKey];
@@ -54,38 +58,22 @@ export default async function handler(req, res) {
 
       await executeD1("INSERT INTO vps_sessions (user_id, session_key, status, expires_at) VALUES (?,?,'pending',?)", [userId, sessionId, expiresAt]);
 
-      // Since the actual Upstash matching logic is complex, we queue them here for demonstration,
-      // or directly use redisCmd to queue.
-      // Find active runners
-      const runnerKeys = await redisCmd(['KEYS', 'runner:*']) || [];
+      // Use Redis SET (SMEMBERS active_runners) instead of KEYS * to avoid
+      // blocking Redis on large keyspaces — Suggestion 5 / Roadmap 7
+      const runnerIds = await redisCmd(['SMEMBERS', 'active_runners']) || [];
       let activeRunners = 0;
-      for (const key of runnerKeys) {
-        const runnerId = key.replace('runner:', '');
+      for (const runnerId of runnerIds) {
         const heartbeat = await redisCmd(['EXISTS', `heartbeat:${runnerId}`]);
         if (heartbeat === 1) activeRunners++;
       }
 
       let triggered = false;
       if (activeRunners < 3) {
-        const payload = {
-          event_type: "run-shared",
-          client_payload: { runner_number: activeRunners + 1 }
-        };
-        const { GH_TOKEN, GH_OWNER, GH_REPO } = process.env;
-        const githubRes = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/dispatches`, {
-          method: 'POST',
-          headers: {
-            "Authorization": `token ${GH_TOKEN}`,
-            "User-Agent": "AbsoraCloud-Vercel",
-            "Accept": "application/vnd.github.v3+json",
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payload)
-        });
-        triggered = githubRes.ok;
+        triggered = await triggerRunner(
+          { event_type: "run-shared", client_payload: { runner_number: activeRunners + 1 } },
+          process.env
+        );
       }
-
-      // The triggered variable is already declared above
 
       const sessionData = {
         status: 'queued',
@@ -111,16 +99,24 @@ export default async function handler(req, res) {
     if (action === 'check_session') {
       const sessionId = req.query.session_id;
       if (!sessionId) return res.status(400).json({ status: 'error', msg: 'Missing session_id' });
+      if (typeof sessionId !== 'string' || !/^[\w-]{5,72}$/.test(sessionId)) {
+        return res.status(400).json({ status: 'error', msg: 'Invalid session_id format' });
+      }
 
       const redisRes = await redisCmd(['GET', `session:${sessionId}`]);
       if (redisRes) {
         try {
           const sData = JSON.parse(redisRes);
           if (sData.status === 'active' && sData.tunnel_url) {
-            // Sync active status to D1 optionally, but return to frontend immediately
             return res.status(200).json({ status: 'active', tunnel_url: sData.tunnel_url, plan: user.plan });
           } else if (sData.status === 'queued') {
-            return res.status(200).json({ status: 'queued', plan: user.plan });
+            // Return queue position so the frontend can display it
+            const queuePos = await redisCmd(['ZRANK', 'vps_queue', sessionId]);
+            return res.status(200).json({
+              status: 'queued',
+              plan: user.plan,
+              queue_position: queuePos !== null ? queuePos + 1 : '?'
+            });
           }
         } catch(e){}
       }
@@ -154,4 +150,32 @@ export default async function handler(req, res) {
     console.error(err);
     return res.status(500).json({ status: 'error', msg: err.message });
   }
+}
+
+/**
+ * Trigger a GitHub Actions workflow dispatch with automatic retry.
+ * Roadmap 9: retry up to `retries` times before giving up.
+ */
+async function triggerRunner(payload, env, retries = 2) {
+  const { GH_TOKEN, GH_OWNER, GH_REPO } = env;
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/dispatches`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `token ${GH_TOKEN}`,
+          'User-Agent': 'AbsoraCloud-Vercel',
+          'Accept': 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) return true;
+      console.error(`[Dispatch] Attempt ${i + 1} failed: ${res.status}`);
+    } catch (e) {
+      console.error(`[Dispatch] Attempt ${i + 1} error: ${e.message}`);
+    }
+    if (i < retries - 1) await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+  }
+  return false;
 }
