@@ -1,0 +1,10 @@
+{
+  "name": "my-vps-vercel",
+  "version": "1.0.0",
+  "description": "Vercel + D1 migration",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "uuid": "^9.0.0"
+  },
+  "type": "module"
+}
