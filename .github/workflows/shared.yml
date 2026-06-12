@@ -111,8 +111,11 @@ jobs:
               {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}, method='POST')
           urllib.request.urlopen(req)
 
-          # Also update all queued sessions assigned to this runner
-          # (so check_session.php can return the URL)
+          # Track in active_runners SET (avoids KEYS * blocking Redis)
+          req = urllib.request.Request(url, json.dumps(['SADD', 'active_runners', rid]).encode(),
+              {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}, method='POST')
+          urllib.request.urlopen(req)
+
           print(f'Runner {rid} updated with tunnel: {turl}')
           "
 
@@ -148,6 +151,12 @@ jobs:
                           {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}, method='POST')
                       urllib.request.urlopen(req)
                   except: pass
+              # Remove from active_runners SET
+              try:
+                  req = urllib.request.Request(url, json.dumps(['SREM', 'active_runners', rid]).encode(),
+                      {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}, method='POST')
+                  urllib.request.urlopen(req)
+              except: pass
               print(f'Runner {rid} deregistered')
           " || true
 

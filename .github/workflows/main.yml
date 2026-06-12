@@ -3,8 +3,9 @@ on:
   repository_dispatch:
     types: [run-code]
 
+# Removed: contents: write — no longer needed since we don't git-push session files
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   execute:
@@ -18,6 +19,8 @@ jobs:
       VPS_STORAGE: ${{ github.event.client_payload.storage_mb }}
       SESSION_ID:  ${{ github.event.client_payload.session_id }}
       USER_ID:     ${{ github.event.client_payload.user_id }}
+      UPSTASH_URL:   ${{ secrets.UPSTASH_URL }}
+      UPSTASH_TOKEN: ${{ secrets.UPSTASH_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -66,27 +69,25 @@ jobs:
             exit 1
           fi
 
-          # ── 6. Save URL to repo (frontend polls this) ─────────────
-          git config --global user.name  "AbsoraCloud-Bot"
-          git config --global user.email "bot@absoracloud.local"
-
-          mkdir -p sessions
-          echo "$TUNNEL_URL" > sessions/$SESSION_ID
-
-          git pull --rebase
-          git add sessions/$SESSION_ID
-          git commit -m "Session live: $SESSION_ID [$VPS_PLAN]"
-          git push
+          # ── 6. Update tunnel URL in Redis (replaces dead git-push flow) ──
+          export TUNNEL_URL
+          python3 -c "
+          import json, urllib.request, os
+          url   = os.environ['UPSTASH_URL']
+          token = os.environ['UPSTASH_TOKEN']
+          sid   = os.environ['SESSION_ID']
+          turl  = os.environ['TUNNEL_URL']
+          # Write tunnel URL directly into the session key in Redis
+          data = json.dumps(['HSET', f'session:{sid}', 'tunnel_url', turl, 'status', 'active'])
+          req = urllib.request.Request(url, data.encode(),
+              {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}, method='POST')
+          urllib.request.urlopen(req)
+          print(f'Session {sid} tunnel updated: {turl}')
+          "
 
           echo "Session live: $TUNNEL_URL"
 
           # ── 7. Keep alive for session duration ────────────────────
           sleep $VPS_SESSION
-
-          # ── 8. Cleanup session file from repo ─────────────────────
-          git pull --rebase
-          git rm --ignore-unmatch sessions/$SESSION_ID
-          git commit -m "Session ended: $SESSION_ID" || true
-          git push || true
 
           echo "Session $SESSION_ID ended."

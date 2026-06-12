@@ -1,0 +1,1510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AbsoraCloud VPS | High Performance Cloud</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg:       #070b12;
+            --s1:       #0d1524;
+            --s2:       #121d2e;
+            --s3:       #1a2740;
+            --blue:     #3b82f6;
+            --cyan:     #06b6d4;
+            --purple:   #8b5cf6;
+            --green:    #22c55e;
+            --red:      #ef4444;
+            --amber:    #f59e0b;
+            --text:     #e2e8f0;
+            --dim:      #64748b;
+            --border:   #1e3050;
+            --font:     'Syne', sans-serif;
+            --mono:     'JetBrains Mono', monospace;
+        }
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{background:var(--bg);color:var(--text);font-family:var(--font);height:100vh;overflow:hidden}
+
+        /* ════════════════════════════ LANDING ════════════════════════════ */
+        #landing-view{
+            display:flex;flex-direction:column;align-items:center;justify-content:center;
+            height:100%;padding:20px;position:relative;overflow:hidden;
+            background:radial-gradient(ellipse 90% 60% at 50% -5%,rgba(59,130,246,0.1) 0%,transparent 65%);
+        }
+        #landing-view::before{
+            content:'';position:absolute;inset:0;pointer-events:none;
+            background-image:linear-gradient(rgba(59,130,246,0.03) 1px,transparent 1px),
+                             linear-gradient(90deg,rgba(59,130,246,0.03) 1px,transparent 1px);
+            background-size:44px 44px;
+        }
+        .badge{
+            background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.25);
+            color:var(--cyan);font-size:.72rem;font-weight:700;letter-spacing:.15em;
+            text-transform:uppercase;padding:6px 16px;border-radius:100px;margin-bottom:22px;
+            display:flex;align-items:center;gap:8px;
+        }
+        .bdot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+        @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.4)}50%{box-shadow:0 0 0 6px rgba(34,197,94,0)}}
+        .hero-title{
+            font-size:clamp(2.2rem,4.5vw,3.8rem);font-weight:800;line-height:1.08;
+            text-align:center;margin-bottom:14px;letter-spacing:-.03em;
+        }
+        .grad{background:linear-gradient(135deg,#60a5fa 0%,#a78bfa 50%,#22d3ee 100%);
+              -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+        .hero-sub{color:var(--dim);font-size:1rem;text-align:center;max-width:480px;line-height:1.7;margin-bottom:36px}
+        .specs-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:36px;max-width:680px;width:100%}
+        .spec-card{
+            background:var(--s1);border:1px solid var(--border);padding:18px;border-radius:10px;
+            text-align:center;transition:all .22s;cursor:default;
+        }
+        .spec-card:hover{border-color:rgba(59,130,246,.4);transform:translateY(-3px)}
+        .spec-icon{font-size:18px;color:var(--cyan);margin-bottom:8px}
+        .spec-val{font-size:1rem;font-weight:700}.spec-label{color:var(--dim);font-size:.78rem;margin-top:3px}
+        .cta-row{display:flex;gap:12px;align-items:center}
+        .cta-btn{
+            background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;
+            padding:13px 34px;border-radius:9px;font-size:.95rem;font-weight:700;
+            border:none;cursor:pointer;box-shadow:0 0 28px rgba(99,102,241,.3);
+            transition:all .25s;display:flex;align-items:center;gap:9px;font-family:var(--font);
+        }
+        .cta-btn:hover{transform:scale(1.04);box-shadow:0 0 40px rgba(99,102,241,.5)}
+        .outline-btn{
+            background:transparent;color:var(--text);padding:13px 24px;border-radius:9px;
+            font-size:.95rem;font-weight:600;border:1px solid var(--border);cursor:pointer;
+            transition:all .2s;font-family:var(--font);display:flex;align-items:center;gap:8px;
+        }
+        .outline-btn:hover{border-color:var(--blue);color:var(--blue)}
+        #boot-msg{color:var(--dim);font-size:.8rem;min-height:18px;font-family:var(--mono);margin-top:12px;text-align:center}
+
+        /* ════════════════════════════ AUTH MODAL ════════════════════════════ */
+        .modal-overlay{
+            position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);
+            display:flex;align-items:center;justify-content:center;z-index:1000;
+        }
+        .modal{
+            background:var(--s1);border:1px solid var(--border);border-radius:16px;
+            padding:36px;width:100%;max-width:420px;position:relative;
+            box-shadow:0 40px 80px rgba(0,0,0,.6);
+        }
+        .modal-title{font-size:1.5rem;font-weight:800;margin-bottom:6px}
+        .modal-sub{color:var(--dim);font-size:.85rem;margin-bottom:28px}
+        .tab-row{display:flex;gap:0;margin-bottom:28px;background:var(--bg);border-radius:8px;padding:3px}
+        .tab-btn{
+            flex:1;padding:8px;border-radius:6px;border:none;background:transparent;
+            color:var(--dim);font-family:var(--font);font-size:.85rem;font-weight:600;cursor:pointer;transition:.2s;
+        }
+        .tab-btn.active{background:var(--s2);color:var(--text)}
+        .form-group{margin-bottom:16px}
+        .form-label{font-size:.78rem;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;display:block}
+        .form-input{
+            width:100%;background:var(--s2);border:1px solid var(--border);border-radius:8px;
+            color:var(--text);padding:11px 14px;font-family:var(--font);font-size:.9rem;outline:none;transition:.2s;
+        }
+        .form-input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(59,130,246,.1)}
+        .form-btn{
+            width:100%;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;
+            padding:12px;border-radius:8px;font-size:.95rem;font-weight:700;border:none;cursor:pointer;
+            font-family:var(--font);transition:all .2s;margin-top:8px;
+        }
+        .form-btn:hover{opacity:.9}
+        .form-btn:disabled{opacity:.5;cursor:not-allowed}
+        .form-error{color:var(--red);font-size:.82rem;margin-top:8px;min-height:18px}
+        .modal-close{
+            position:absolute;top:16px;right:16px;background:transparent;border:none;
+            color:var(--dim);font-size:1.2rem;cursor:pointer;transition:.2s;
+        }
+        .modal-close:hover{color:var(--text)}
+
+        /* ════════════════════════════ DASHBOARD ════════════════════════════ */
+        #dashboard-view{display:none;height:100%;flex-direction:column}
+        .topbar{
+            height:54px;background:var(--s1);border-bottom:1px solid var(--border);
+            display:flex;align-items:center;padding:0 20px;gap:16px;flex-shrink:0;
+        }
+        .logo-area{font-size:1.05rem;font-weight:800;display:flex;align-items:center;gap:8px;margin-right:12px}
+        .logo-icon{color:var(--blue)}
+        .plan-badge{
+            font-size:.68rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+            padding:3px 10px;border-radius:100px;border:1px solid;
+        }
+        .plan-free      {color:var(--dim);border-color:var(--dim)}
+        .plan-basic     {color:var(--blue);border-color:var(--blue)}
+        .plan-pro       {color:var(--purple);border-color:var(--purple)}
+        .plan-enterprise{color:var(--amber);border-color:var(--amber)}
+        .topbar-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+        .status-pill{
+            display:flex;align-items:center;gap:7px;background:var(--bg);
+            border:1px solid var(--border);border-radius:100px;padding:4px 12px 4px 8px;
+            font-size:.78rem;color:var(--dim);
+        }
+        .dot{width:7px;height:7px;border-radius:50%;background:var(--dim)}
+        .dot.online{background:var(--green);box-shadow:0 0 6px var(--green);animation:pulse 2s infinite}
+        .topbar-btn{
+            background:transparent;border:1px solid var(--border);color:var(--dim);
+            border-radius:7px;padding:6px 14px;font-size:.78rem;font-weight:600;
+            cursor:pointer;font-family:var(--font);transition:.2s;display:flex;align-items:center;gap:6px;
+        }
+        .topbar-btn:hover{border-color:var(--blue);color:var(--text)}
+
+        /* ════════════════════════════ MAIN LAYOUT ════════════════════════════ */
+        .dash-body{flex:1;display:flex;overflow:hidden}
+        .sidebar{
+            width:220px;background:var(--s1);border-right:1px solid var(--border);
+            padding:16px;display:flex;flex-direction:column;gap:4px;flex-shrink:0;
+        }
+        .nav-item{
+            padding:10px 12px;border-radius:8px;color:var(--dim);cursor:pointer;
+            display:flex;align-items:center;gap:10px;font-size:.85rem;font-weight:600;transition:.2s;
+        }
+        .nav-item:hover{background:rgba(59,130,246,.08);color:var(--text)}
+        .nav-item.active{background:rgba(59,130,246,.12);color:var(--blue)}
+        .nav-item i{width:16px;text-align:center}
+        .nav-sep{height:1px;background:var(--border);margin:8px 0}
+        .nav-bottom{margin-top:auto}
+
+        /* ════════════════════════════ PANELS ════════════════════════════ */
+        .main-area{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+        .panel-page{display:none;flex-direction:column;flex:1;overflow:hidden}
+        .panel-page.active{display:flex}
+        .panel-pad{padding:20px;flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+        /* ── Terminal ── */
+        .terminal-window{
+            flex:1;background:#000;border-radius:10px;border:1px solid var(--border);
+            display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5);
+        }
+        .term-header{
+            background:var(--s1);padding:10px 16px;display:flex;align-items:center;
+            gap:8px;border-bottom:1px solid var(--border);flex-shrink:0;
+        }
+        .win-btn{width:12px;height:12px;border-radius:50%}
+        .wb-r{background:#ff5f56}.wb-y{background:#ffbd2e}.wb-g{background:#27c93f}
+        .term-title{margin-left:10px;font-size:.75rem;color:var(--dim);font-family:var(--mono)}
+        #terminal-output{
+            flex:1;padding:16px 20px;font-family:var(--mono);font-size:13px;color:#cbd5e1;
+            overflow-y:auto;white-space:pre-wrap;line-height:1.65;
+        }
+        #terminal-output::-webkit-scrollbar{width:5px}
+        #terminal-output::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+        .input-area{
+            display:flex;align-items:center;background:#08111e;padding:10px 16px;
+            border-top:1px solid var(--border);flex-shrink:0;
+        }
+        .prompt-label{color:var(--green);font-family:var(--mono);font-size:13px;font-weight:700;margin-right:8px;white-space:nowrap}
+        #cmd-input{
+            flex:1;background:transparent;border:none;color:#fff;
+            font-family:var(--mono);font-size:13px;outline:none;caret-color:var(--cyan);
+        }
+
+        /* ── Slot Tabs ── */
+        .slot-tabs{display:flex;gap:6px;padding:12px 20px 0;background:var(--s1);border-bottom:1px solid var(--border);flex-shrink:0;overflow-x:auto}
+        .slot-tab{display:flex;align-items:center;gap:7px;padding:7px 14px;border-radius:8px 8px 0 0;font-size:.78rem;font-family:var(--mono);cursor:pointer;border:1px solid transparent;border-bottom:none;color:var(--dim);background:transparent;transition:.15s;white-space:nowrap}
+        .slot-tab:hover{color:#fff;background:rgba(255,255,255,.04)}
+        .slot-tab.active{color:#fff;background:#0a1628;border-color:var(--border)}
+        .slot-tab .slot-dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex-shrink:0;transition:.2s}
+        .slot-tab .slot-dot.live{background:var(--green);box-shadow:0 0 6px var(--green)}
+        .slot-tab .slot-dot.connecting{background:var(--amber);animation:pulse 1s infinite}
+        .slot-close{margin-left:4px;opacity:.4;font-size:.7rem;line-height:1;padding:1px 3px;border-radius:3px}
+        .slot-close:hover{opacity:1;background:rgba(255,80,80,.2);color:#f87171}
+        .slot-add-btn{padding:7px 12px;border-radius:8px 8px 0 0;font-size:.82rem;color:var(--dim);cursor:pointer;border:1px dashed var(--border);border-bottom:none;background:transparent;transition:.15s;white-space:nowrap}
+        .slot-add-btn:hover{color:#fff;border-color:var(--cyan)}
+        .slot-add-btn.disabled{opacity:.35;cursor:not-allowed}
+
+        /* ── Per-slot terminal ── */
+        .slot-terminal{flex:1;display:none;flex-direction:column;overflow:hidden}
+        .slot-terminal.active{display:flex}
+        .slot-output{flex:1;padding:16px 20px;font-family:var(--mono);font-size:13px;color:#cbd5e1;overflow-y:auto;white-space:pre-wrap;line-height:1.65}
+        .slot-output::-webkit-scrollbar{width:5px}
+        .slot-output::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+        /* ── Metrics ── */
+        .metrics-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;padding:20px}
+        .metric-card{
+            background:var(--s1);border:1px solid var(--border);border-radius:12px;padding:20px;
+        }
+        .metric-label{font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin-bottom:12px}
+        .metric-val{font-size:2rem;font-weight:800;margin-bottom:4px}
+        .metric-sub{font-size:.78rem;color:var(--dim)}
+        .chart-wrap{height:120px;margin-top:14px;position:relative}
+        .plan-limits{
+            margin:0 20px 20px;background:var(--s1);border:1px solid var(--border);
+            border-radius:12px;padding:16px 20px;display:flex;gap:32px;flex-wrap:wrap;
+        }
+        .limit-item{display:flex;flex-direction:column;gap:4px}
+        .limit-label{font-size:.72rem;color:var(--dim);text-transform:uppercase;letter-spacing:.1em;font-weight:700}
+        .limit-val{font-size:1rem;font-weight:700;color:var(--text)}
+        .progress-bar{height:4px;background:var(--border);border-radius:2px;margin-top:6px;min-width:80px}
+        .progress-fill{height:100%;border-radius:2px;transition:width .5s}
+
+        /* ── File Manager ── */
+        .fm-wrap{flex:1;display:flex;overflow:hidden;padding:20px;gap:16px}
+        .fm-sidebar{
+            width:200px;background:var(--s1);border:1px solid var(--border);
+            border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:4px;
+            overflow-y:auto;flex-shrink:0;
+        }
+        .fm-file{
+            padding:8px 10px;border-radius:6px;font-size:.82rem;cursor:pointer;
+            display:flex;align-items:center;gap:8px;color:var(--text);transition:.15s;font-family:var(--mono);
+        }
+        .fm-file:hover{background:var(--s2)}.fm-file.active{background:rgba(59,130,246,.15);color:var(--blue)}
+        .fm-file i{color:var(--dim);font-size:.8rem;width:12px}
+        .fm-main{flex:1;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+        .fm-toolbar{
+            display:flex;gap:8px;align-items:center;background:var(--s1);
+            border:1px solid var(--border);border-radius:10px;padding:10px 14px;flex-shrink:0;
+        }
+        .fm-btn{
+            background:var(--s2);border:1px solid var(--border);color:var(--text);
+            border-radius:6px;padding:6px 14px;font-size:.8rem;font-weight:600;
+            cursor:pointer;font-family:var(--font);transition:.2s;display:flex;align-items:center;gap:6px;
+        }
+        .fm-btn:hover{border-color:var(--blue);color:var(--blue)}
+        .fm-btn.run{border-color:rgba(34,197,94,.4);color:var(--green)}
+        .fm-btn.run:hover{background:rgba(34,197,94,.1)}
+        .fm-editor{
+            flex:1;background:#000;border:1px solid var(--border);border-radius:10px;
+            font-family:var(--mono);font-size:13px;color:#e2e8f0;padding:16px;
+            resize:none;outline:none;overflow-y:auto;white-space:pre;
+        }
+        .fm-locked{
+            flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+            gap:12px;color:var(--dim);text-align:center;background:var(--s1);
+            border:1px solid var(--border);border-radius:10px;
+        }
+        .fm-locked i{font-size:2.5rem;color:var(--border)}
+        .fm-locked a{color:var(--blue);cursor:pointer;text-decoration:underline}
+        .fm-status{font-size:.78rem;color:var(--dim);font-family:var(--mono);margin-left:auto}
+        .upload-hidden{display:none}
+
+        /* ── Plans page ── */
+        .plans-wrap{
+            flex:1;overflow-y:auto;padding:24px;
+        }
+        .plans-wrap::-webkit-scrollbar{width:5px}
+        .plans-wrap::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+        .plans-title{font-size:1.6rem;font-weight:800;margin-bottom:6px}
+        .plans-sub{color:var(--dim);font-size:.88rem;margin-bottom:28px}
+        .plans-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:28px}
+        .plan-card{
+            background:var(--s1);border:1px solid var(--border);border-radius:14px;
+            padding:24px;display:flex;flex-direction:column;gap:14px;transition:.22s;position:relative;overflow:hidden;
+        }
+        .plan-card::before{
+            content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:14px 14px 0 0;
+        }
+        .plan-card.current{border-color:rgba(59,130,246,.4);box-shadow:0 0 20px rgba(59,130,246,.1)}
+        .plan-card:hover{transform:translateY(-4px)}
+        .plan-name{font-size:1.1rem;font-weight:800}
+        .plan-price{font-size:2rem;font-weight:800;line-height:1}
+        .plan-price span{font-size:.9rem;font-weight:400;color:var(--dim)}
+        .plan-features{list-style:none;display:flex;flex-direction:column;gap:8px;flex:1}
+        .plan-features li{font-size:.82rem;color:var(--dim);display:flex;align-items:center;gap:8px}
+        .plan-features li i{color:var(--green);font-size:.75rem}
+        .plan-features li.no i{color:var(--red)}
+        .plan-features li.no{text-decoration:line-through;opacity:.5}
+        .plan-cta{
+            padding:10px;border-radius:8px;font-size:.85rem;font-weight:700;
+            border:none;cursor:pointer;font-family:var(--font);transition:.2s;text-align:center;
+        }
+        .plan-cta.current-plan{background:var(--s2);color:var(--dim);cursor:default}
+        .plan-cta.upgrade{background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff}
+        .plan-cta.upgrade:hover{opacity:.9}
+        .popular-tag{
+            position:absolute;top:12px;right:12px;background:var(--purple);
+            color:#fff;font-size:.65rem;font-weight:700;letter-spacing:.1em;
+            text-transform:uppercase;padding:3px 8px;border-radius:100px;
+        }
+
+        /* ── Payment modal ── */
+        .pay-modal{max-width:480px}
+        .gpay-box{
+            background:var(--s2);border:1px solid var(--border);border-radius:10px;
+            padding:20px;text-align:center;margin-bottom:20px;
+        }
+        .gpay-id{font-family:var(--mono);font-size:1.1rem;font-weight:700;color:var(--cyan);margin:8px 0}
+        .gpay-amount{font-size:1.8rem;font-weight:800;color:var(--green);margin:6px 0}
+        .gpay-note{font-size:.78rem;color:var(--dim);line-height:1.5}
+        .upload-area{
+            border:2px dashed var(--border);border-radius:10px;padding:24px;
+            text-align:center;cursor:pointer;transition:.2s;margin-bottom:16px;
+        }
+        .upload-area:hover{border-color:var(--blue)}
+        .upload-area i{font-size:2rem;color:var(--dim);margin-bottom:8px}
+        .upload-area p{font-size:.85rem;color:var(--dim)}
+
+        /* Utilities */
+        .hidden{display:none!important}
+        .text-green{color:var(--green)}.text-blue{color:#60a5fa}
+        .text-dim{color:var(--dim)}.text-danger{color:var(--red)}.text-amber{color:var(--amber)}
+        .spin{animation:spin 1s linear infinite}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        .tag{display:inline-block;padding:2px 8px;border-radius:100px;font-size:.68rem;font-weight:700}
+
+        /* Notification toast */
+        #toast{
+            position:fixed;bottom:24px;right:24px;background:var(--s1);border:1px solid var(--border);
+            border-radius:10px;padding:12px 20px;font-size:.85rem;z-index:9999;
+            transform:translateY(80px);opacity:0;transition:all .3s;max-width:320px;
+        }
+        #toast.show{transform:translateY(0);opacity:1}
+        #toast.success{border-color:rgba(34,197,94,.4);color:var(--green)}
+        #toast.error{border-color:rgba(239,68,68,.4);color:var(--red)}
+    </style>
+</head>
+<body>
+
+<!-- ════════════ TOAST ════════════ -->
+<div id="toast"></div>
+
+<!-- ════════════ AUTH MODAL ════════════ -->
+<div class="modal-overlay hidden" id="auth-modal">
+    <div class="modal">
+        <button class="modal-close" onclick="closeAuthModal()"><i class="fa-solid fa-xmark"></i></button>
+        <div class="modal-title">Welcome to AbsoraCloud</div>
+        <div class="modal-sub">Sign in or create your free account</div>
+        <div class="tab-row">
+            <button class="tab-btn active" id="tab-login" onclick="switchTab('login')">Sign In</button>
+            <button class="tab-btn" id="tab-register" onclick="switchTab('register')">Register</button>
+        </div>
+        <!-- Login form -->
+        <div id="form-login">
+            <div class="form-group">
+                <label class="form-label">Username or Email</label>
+                <input class="form-input" type="text" id="login-user" placeholder="your@email.com">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Password</label>
+                <input class="form-input" type="password" id="login-pass" placeholder="••••••••">
+            </div>
+            <button class="form-btn" id="login-btn" onclick="doLogin()">Sign In</button>
+            <div class="form-error" id="login-error"></div>
+        </div>
+        <!-- Register form -->
+        <div id="form-register" class="hidden">
+            <div class="form-group">
+                <label class="form-label">Username</label>
+                <input class="form-input" type="text" id="reg-user" placeholder="coolhacker">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Email</label>
+                <input class="form-input" type="email" id="reg-email" placeholder="you@email.com">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Password</label>
+                <input class="form-input" type="password" id="reg-pass" placeholder="min. 6 chars">
+            </div>
+            <button class="form-btn" id="reg-btn" onclick="doRegister()">Create Free Account</button>
+            <div class="form-error" id="reg-error"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ════════════ PAYMENT MODAL ════════════ -->
+<div class="modal-overlay hidden" id="pay-modal">
+    <div class="modal pay-modal">
+        <button class="modal-close" onclick="closePayModal()"><i class="fa-solid fa-xmark"></i></button>
+        <div class="modal-title">Upgrade Plan</div>
+        <div class="modal-sub" id="pay-plan-name">Upgrading to Pro</div>
+        <div class="gpay-box">
+            <div style="font-size:.78rem;color:var(--dim);margin-bottom:4px">Pay via Google Pay / UPI to</div>
+            <div class="gpay-id">aadiplayz94@okaxis</div>  <!-- ← paste your GPay UPI ID -->
+            <div class="gpay-amount" id="pay-amount">₹299</div>
+            <div class="gpay-note">After payment, upload your screenshot below.<br>Your plan will be upgraded within 24 hours.</div>
+        </div>
+        <div class="upload-area" onclick="document.getElementById('ss-upload').click()">
+            <i class="fa-solid fa-image"></i>
+            <p id="upload-label">Click to upload payment screenshot</p>
+        </div>
+        <input type="file" id="ss-upload" accept="image/*" class="upload-hidden" onchange="handleFileSelect(this)">
+        <button class="form-btn" id="pay-submit-btn" onclick="submitPayment()">Submit for Review</button>
+        <div class="form-error" id="pay-error"></div>
+        <div style="margin-top:14px;padding:12px;background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.15);border-radius:8px;font-size:.78rem;color:var(--dim)">
+            <i class="fa-solid fa-circle-info" style="color:var(--blue)"></i>
+            &nbsp;For demo: you can request an upgrade without actual payment — just submit any screenshot.
+        </div>
+    </div>
+</div>
+
+<!-- ════════════ LANDING ════════════ -->
+<div id="landing-view">
+    <div class="badge"><div class="bdot"></div>Servers Online — Free Tier Available</div>
+    <h1 class="hero-title"><span class="grad">AbsoraCloud VPS</span><br>Instant Linux Environments</h1>
+    <p class="hero-sub">Ephemeral AMD EPYC™ instances with full terminal access. No credit card required on the free tier.</p>
+    <div class="specs-grid">
+        <div class="spec-card"><i class="fa-solid fa-microchip spec-icon"></i><div class="spec-val">AMD EPYC™</div><div class="spec-label">Up to 4 Cores</div></div>
+        <div class="spec-card"><i class="fa-solid fa-memory spec-icon"></i><div class="spec-val">Up to 16 GB</div><div class="spec-label">DDR4 Memory</div></div>
+        <div class="spec-card"><i class="fa-solid fa-network-wired spec-icon"></i><div class="spec-val">10 Gbps</div><div class="spec-label">Network Speed</div></div>
+    </div>
+    <div class="cta-row">
+        <button class="cta-btn" onclick="openAuthModal()"><i class="fa-solid fa-rocket"></i> Get Started Free</button>
+        <button class="outline-btn" onclick="showPlansPage()"><i class="fa-solid fa-layer-group"></i> View Plans</button>
+    </div>
+    <p id="boot-msg"></p>
+</div>
+
+<!-- ════════════ DASHBOARD ════════════ -->
+<div id="dashboard-view" class="hidden">
+    <div class="topbar">
+        <div class="logo-area"><i class="fa-solid fa-cloud logo-icon"></i> AbsoraCloud VPS</div>
+        <span class="plan-badge plan-free" id="topbar-plan-badge">FREE</span>
+        <div class="topbar-right">
+            <div class="status-pill"><div id="status-dot" class="dot"></div><span id="connection-state">Idle</span></div>
+            <div style="font-size:.75rem;color:var(--dim);font-family:var(--mono)">
+                <span id="topbar-user">...</span>
+            </div>
+            <button class="topbar-btn" onclick="logoutUser()"><i class="fa-solid fa-right-from-bracket"></i> Logout</button>
+        </div>
+    </div>
+
+    <div class="dash-body">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="nav-item active" onclick="showPanel('terminal')" id="nav-terminal">
+                <i class="fa-solid fa-terminal"></i> Terminal
+            </div>
+            <div class="nav-item" onclick="showPanel('metrics')" id="nav-metrics">
+                <i class="fa-solid fa-chart-line"></i> Metrics
+            </div>
+            <div class="nav-item" onclick="showPanel('files')" id="nav-files">
+                <i class="fa-solid fa-folder-open"></i> Files
+            </div>
+            <div class="nav-sep"></div>
+            <div class="nav-item" onclick="showPanel('plans')" id="nav-plans">
+                <i class="fa-solid fa-layer-group"></i> Plans
+            </div>
+            <div class="nav-bottom">
+                <div style="padding:10px 12px;font-size:.72rem;color:var(--dim);font-family:var(--mono)">
+                    Slot: <span id="session-display">—</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main area -->
+        <div class="main-area">
+
+            <!-- ── Terminal (multi-slot) ── -->
+            <div class="panel-page active" id="panel-terminal">
+                <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+                    <div class="terminal-window" style="border-radius:0;border-left:none;border-right:none;border-top:none">
+                        <div class="term-header">
+                            <div class="win-btn wb-r"></div>
+                            <div class="win-btn wb-y"></div>
+                            <div class="win-btn wb-g"></div>
+                            <div class="term-title" id="active-slot-title">root@absoracloud:~ (Secure Shell)</div>
+                            <div style="margin-left:auto;display:flex;gap:8px">
+                                <button class="topbar-btn" style="font-size:.72rem;padding:4px 10px" onclick="launchActiveSlot()" id="launch-btn">
+                                    <i class="fa-solid fa-rocket"></i> Launch
+                                </button>
+                            </div>
+                        </div>
+                        <!-- Slot tabs row -->
+                        <div class="slot-tabs" id="slot-tabs"></div>
+                        <!-- Per-slot terminals injected here -->
+                        <div id="slot-terminals" style="flex:1;display:flex;flex-direction:column;overflow:hidden"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Metrics ── -->
+            <div class="panel-page" id="panel-metrics">
+                <div class="plan-limits" id="plan-limits-bar"></div>
+                <div class="metrics-grid" id="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-label">CPU Usage</div>
+                        <div class="metric-val" id="cpu-val">—</div>
+                        <div class="metric-sub" id="cpu-sub">Not connected</div>
+                        <div class="chart-wrap"><canvas id="cpu-chart"></canvas></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">RAM Usage</div>
+                        <div class="metric-val" id="ram-val">—</div>
+                        <div class="metric-sub" id="ram-sub">Not connected</div>
+                        <div class="chart-wrap"><canvas id="ram-chart"></canvas></div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Session Time</div>
+                        <div class="metric-val" id="time-val">—</div>
+                        <div class="metric-sub" id="time-sub">Not started</div>
+                        <div style="margin-top:14px">
+                            <div class="limit-label" style="margin-bottom:6px">Time Remaining</div>
+                            <div class="progress-bar"><div class="progress-fill" id="time-bar" style="width:100%;background:var(--green)"></div></div>
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">Disk / Storage</div>
+                        <div class="metric-val" id="disk-val">—</div>
+                        <div class="metric-sub" id="disk-sub">Temp storage</div>
+                        <div class="chart-wrap"><canvas id="disk-chart"></canvas></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── File Manager ── -->
+            <div class="panel-page" id="panel-files">
+                <div class="fm-wrap" id="fm-wrap">
+                    <div class="fm-locked" id="fm-locked">
+                        <i class="fa-solid fa-lock"></i>
+                        <div style="font-size:.95rem;font-weight:700">File Manager — Pro & Enterprise Only</div>
+                        <div style="font-size:.82rem">Upgrade your plan to access the file manager.<br>
+                            <a onclick="showPanel('plans')">View Plans →</a>
+                        </div>
+                    </div>
+                    <div class="hidden" id="fm-content" style="display:contents">
+                        <div class="fm-sidebar" id="fm-file-list"></div>
+                        <div class="fm-main">
+                            <div class="fm-toolbar">
+                                <span style="font-size:.82rem;color:var(--dim);font-family:var(--mono)" id="fm-filename">No file selected</span>
+                                <div style="margin-left:auto;display:flex;gap:8px">
+                                    <button class="fm-btn" onclick="document.getElementById('fm-upload').click()"><i class="fa-solid fa-upload"></i> Upload</button>
+                                    <button class="fm-btn" onclick="fmNewFile()"><i class="fa-solid fa-file-circle-plus"></i> New</button>
+                                    <button class="fm-btn" onclick="fmSave()"><i class="fa-solid fa-floppy-disk"></i> Save</button>
+                                    <button class="fm-btn run" onclick="fmRun()"><i class="fa-solid fa-play"></i> Run</button>
+                                </div>
+                                <span class="fm-status" id="fm-status"></span>
+                            </div>
+                            <textarea class="fm-editor" id="fm-editor" placeholder="Select or create a file..."></textarea>
+                        </div>
+                        <input type="file" id="fm-upload" class="upload-hidden" onchange="fmUpload(this)">
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Plans ── -->
+            <div class="panel-page" id="panel-plans">
+                <div class="plans-wrap">
+                    <div class="plans-title">Choose Your Plan</div>
+                    <div class="plans-sub">Upgrade anytime. Pay via GPay — manual verification within 24h.</div>
+                    <div class="plans-grid" id="plans-grid"></div>
+                </div>
+            </div>
+
+        </div><!-- /main-area -->
+    </div><!-- /dash-body -->
+</div><!-- /dashboard-view -->
+
+<!-- ════════════ LANDING PLANS (before login) ════════════ -->
+<div id="landing-plans" class="hidden" style="position:fixed;inset:0;background:var(--bg);z-index:500;overflow-y:auto;padding:40px 20px">
+    <div style="max-width:900px;margin:0 auto">
+        <button onclick="hideLandingPlans()" style="background:transparent;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 16px;cursor:pointer;font-family:var(--font);margin-bottom:24px;display:flex;align-items:center;gap:8px">
+            <i class="fa-solid fa-arrow-left"></i> Back
+        </button>
+        <div class="plans-title">Choose Your Plan</div>
+        <div class="plans-sub">Start free, upgrade when you need more power.</div>
+        <div class="plans-grid" id="landing-plans-grid" style="margin-top:28px"></div>
+    </div>
+</div>
+
+<script>
+const originalFetch = window.fetch;
+window.fetch = async function(resource, config) {
+    if(typeof resource === 'string' && resource.startsWith('/api')) {
+        config = config || {};
+        config.headers = config.headers || {};
+        const token = localStorage.getItem('auth_token');
+        if(token) {
+            config.headers['Authorization'] = 'Bearer ' + token;
+        }
+    }
+    return originalFetch.call(this, resource, config);
+};
+
+// ════════════════════════════ STATE ════════════════════════════
+const PLANS = {
+    free:       {name:'Free',       price:0,    cpu:0.5, ram:2048,  session:3600,  slots:1,  fm:false, storage:100,  color:'#64748b'},
+    basic:      {name:'Basic',      price:99,   cpu:1,   ram:4096,  session:10800, slots:2,  fm:false, storage:3072, color:'#3b82f6'},
+    pro:        {name:'Pro',        price:299,  cpu:2,   ram:8192,  session:21600, slots:3,  fm:true,  storage:4096, color:'#8b5cf6'},
+    enterprise: {name:'Enterprise', price:799,  cpu:4,   ram:16384, session:21600, slots:4,  fm:true,  storage:5120, color:'#f59e0b'},
+};
+
+let currentUser    = null;
+let selectedPlan   = null;
+let selectedFile   = null;
+let activeSlotIdx  = 0;       // which tab is currently visible
+
+// Each slot: { id, socket, sessionId, sessionExpiry, tunnelUrl,
+//              metricsTimer, countdownTimer, cpuHistory, ramHistory, status }
+// status: 'idle' | 'launching' | 'polling' | 'live' | 'reconnecting'
+let slots = [];
+
+// ── Slot helpers ────────────────────────────────────────────────
+function maxSlots() { return PLANS[currentUser?.plan]?.slots ?? 1; }
+function activeSlot() { return slots[activeSlotIdx] ?? null; }
+
+// Legacy shims so metrics/chart code still works on the active slot
+const term  = () => document.getElementById(`slot-out-${activeSlotIdx}`);
+const input = () => document.getElementById(`slot-input-${activeSlotIdx}`);
+let socket  = null; // kept as shim; real sockets are in slots[i].socket
+
+let cpuChart, ramChart, diskChart;
+
+// ════════════════════════════ INIT ════════════════════════════
+window.onload = async () => {
+    renderPlansGrid('plans-grid', true);
+    renderPlansGrid('landing-plans-grid', false);
+    initCharts();
+    // Check if already logged in
+    try {
+        const r = await fetch('/api/auth?action=me');
+        const d = await r.json();
+        if (d.status === 'success') {
+            currentUser = d.user;
+            enterDashboard();
+        }
+    } catch(e) {}
+};
+
+// ════════════════════════════ AUTH ════════════════════════════
+function openAuthModal() {
+    document.getElementById('auth-modal').classList.remove('hidden');
+}
+function closeAuthModal() {
+    document.getElementById('auth-modal').classList.add('hidden');
+}
+function switchTab(tab) {
+    document.getElementById('tab-login').classList.toggle('active', tab==='login');
+    document.getElementById('tab-register').classList.toggle('active', tab==='register');
+    document.getElementById('form-login').classList.toggle('hidden', tab!=='login');
+    document.getElementById('form-register').classList.toggle('hidden', tab!=='register');
+}
+
+async function doLogin() {
+    const btn = document.getElementById('login-btn');
+    const err = document.getElementById('login-error');
+    btn.disabled = true; btn.textContent = 'Signing in...';
+    err.textContent = '';
+    try {
+        const r = await fetch('/api/auth', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({action:'login', login:document.getElementById('login-user').value, password:document.getElementById('login-pass').value})
+        });
+        const d = await r.json();
+        if (d.status === 'success') {
+            localStorage.setItem('auth_token', d.token);
+            currentUser = d.user;
+            closeAuthModal();
+            enterDashboard();
+        } else {
+            err.textContent = d.msg;
+        }
+    } catch(e) { err.textContent = 'Connection error.'; }
+    btn.disabled = false; btn.textContent = 'Sign In';
+}
+
+async function doRegister() {
+    const btn = document.getElementById('reg-btn');
+    const err = document.getElementById('reg-error');
+    btn.disabled = true; btn.textContent = 'Creating account...';
+    err.textContent = '';
+    try {
+        const r = await fetch('/api/auth', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({action:'register',
+                username: document.getElementById('reg-user').value,
+                email:    document.getElementById('reg-email').value,
+                password: document.getElementById('reg-pass').value})
+        });
+        const d = await r.json();
+        if (d.status === 'success') {
+            localStorage.setItem('auth_token', d.token);
+            currentUser = d.user;
+            closeAuthModal();
+            enterDashboard();
+        } else {
+            err.textContent = d.msg;
+        }
+    } catch(e) { err.textContent = 'Connection error.'; }
+    btn.disabled = false; btn.textContent = 'Create Free Account';
+}
+
+async function logoutUser() {
+    await fetch('/api/auth', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'logout'})});
+    localStorage.removeItem('auth_token');
+    // Close all slot sockets and timers
+    slots.forEach((s, i) => {
+        stopSlotMetrics(i);
+        stopSlotCountdown(i);
+        if (s.socket) { try { s.socket.close(); } catch(_) {} s.socket = null; }
+    });
+    slots = [];
+    clearSavedSlots();
+    currentUser = null;
+    document.getElementById('dashboard-view').style.display = 'none';
+    document.getElementById('dashboard-view').classList.add('hidden');
+    document.getElementById('landing-view').style.display = '';
+    document.getElementById('landing-view').classList.remove('hidden');
+    toast('Logged out.', 'success');
+}
+
+// ════════════════════════════ SESSION PERSISTENCE ════════════════════════════
+function saveSlots() {
+    const data = slots.map(s => ({
+        id: s.id, sessionId: s.sessionId,
+        sessionExpiry: s.sessionExpiry, tunnelUrl: s.tunnelUrl
+    }));
+    sessionStorage.setItem('vps_slots', JSON.stringify(data));
+}
+function clearSavedSlots() { sessionStorage.removeItem('vps_slots'); }
+function loadSavedSlots() {
+    try {
+        const raw = sessionStorage.getItem('vps_slots');
+        if (!raw) return [];
+        return JSON.parse(raw).filter(s => s.sessionExpiry && s.sessionExpiry > Date.now());
+    } catch(e) { return []; }
+}
+
+// ════════════════════════════ DASHBOARD ════════════════════════════
+function enterDashboard() {
+    document.getElementById('landing-view').classList.add('hidden');
+    const dash = document.getElementById('dashboard-view');
+    dash.classList.remove('hidden');
+    dash.style.display = 'flex';
+    document.getElementById('topbar-user').textContent = currentUser.username;
+    updatePlanUI();
+    updateFilesPanel();
+    initSlots();
+}
+
+// ── Build slot state array & render tabs ─────────────────────────
+function initSlots() {
+    slots = [];
+    activeSlotIdx = 0;
+    const max = maxSlots();
+    const saved = loadSavedSlots();
+
+    // Create slot state objects (restore or fresh)
+    for (let i = 0; i < max; i++) {
+        const sv = saved[i];
+        slots.push({
+            id: i,
+            socket: null,
+            sessionId: sv ? sv.sessionId : ('u-' + crypto.randomUUID()),
+            sessionExpiry: sv ? sv.sessionExpiry : null,
+            tunnelUrl: sv ? sv.tunnelUrl : null,
+            metricsTimer: null,
+            countdownTimer: null,
+            cpuHistory: Array(20).fill(0),
+            ramHistory: Array(20).fill(0),
+            status: 'idle',
+        });
+    }
+
+    renderSlotTabs();
+    renderSlotTerminals();
+    switchSlot(0);
+
+    // Restore any saved sessions
+    slots.forEach((s, i) => {
+        if (s.sessionExpiry && Date.now() < s.sessionExpiry) {
+            logSlot(i, 'Restoring session...', 'text-dim');
+            const rem = Math.round((s.sessionExpiry - Date.now()) / 60000);
+            logSlot(i, `Session active — ${rem} min remaining.`, 'text-green');
+            startSlotCountdown(i);
+            if (s.tunnelUrl) connectSlotWS(i, s.tunnelUrl, true);
+            else startSlotPolling(i);
+        }
+    });
+}
+
+function renderSlotTabs() {
+    const container = document.getElementById('slot-tabs');
+    container.innerHTML = '';
+    const max = maxSlots();
+    slots.forEach((s, i) => {
+        const tab = document.createElement('div');
+        tab.className = 'slot-tab' + (i === activeSlotIdx ? ' active' : '');
+        tab.id = `slot-tab-${i}`;
+        tab.innerHTML = `<span class="slot-dot" id="slot-dot-${i}"></span>VPS ${i+1}`;
+        tab.onclick = () => switchSlot(i);
+        container.appendChild(tab);
+        updateSlotDot(i);
+    });
+    // Add slot button (greyed if at max — all slots created)
+    const addBtn = document.createElement('div');
+    addBtn.className = 'slot-add-btn disabled';
+    addBtn.title = `Your ${PLANS[currentUser.plan].name} plan includes ${max} VPS slot${max>1?'s':''}`;
+    addBtn.innerHTML = `<i class="fa-solid fa-lock" style="font-size:.7rem"></i> ${max} slot${max>1?'s':''} (${PLANS[currentUser.plan].name})`;
+    container.appendChild(addBtn);
+}
+
+function renderSlotTerminals() {
+    const container = document.getElementById('slot-terminals');
+    container.innerHTML = '';
+    slots.forEach((s, i) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'slot-terminal' + (i === activeSlotIdx ? ' active' : '');
+        wrap.id = `slot-term-${i}`;
+        wrap.innerHTML = `
+            <div class="slot-output" id="slot-out-${i}">VPS ${i+1} ready. Click <b>Launch</b> to start.</div>
+            <div class="input-area">
+                <div class="prompt-label" id="slot-prompt-${i}">root@absoracloud:~#&nbsp;</div>
+                <input type="text" id="slot-input-${i}" disabled autocomplete="off"
+                    placeholder="Waiting for connection..." onkeydown="handleSlotEnter(event,${i})">
+            </div>`;
+        container.appendChild(wrap);
+    });
+}
+
+function switchSlot(i) {
+    activeSlotIdx = i;
+    document.querySelectorAll('.slot-tab').forEach((t,j) => t.classList.toggle('active', j===i));
+    document.querySelectorAll('.slot-terminal').forEach((t,j) => t.classList.toggle('active', j===i));
+    // Update topbar status to reflect this slot
+    updateTopbarStatus(i);
+    updateLaunchBtn(i);
+    document.getElementById('active-slot-title').textContent =
+        `root@absoracloud:~ — VPS ${i+1} / ${slots.length}`;
+    const sd = document.getElementById('session-display');
+    if (sd) sd.textContent = `${i+1} / ${slots.length}`;
+    const inp = document.getElementById(`slot-input-${i}`);
+    if (inp && !inp.disabled) inp.focus();
+}
+
+function updateSlotDot(i) {
+    const dot = document.getElementById(`slot-dot-${i}`);
+    if (!dot) return;
+    dot.className = 'slot-dot';
+    const s = slots[i];
+    if (s.status === 'live') dot.classList.add('live');
+    else if (s.status === 'launching' || s.status === 'polling' || s.status === 'reconnecting') dot.classList.add('connecting');
+}
+
+function updateTopbarStatus(i) {
+    const s = slots[i];
+    const dot = document.getElementById('status-dot');
+    const label = document.getElementById('connection-state');
+    if (s.status === 'live') { dot.classList.add('online'); label.textContent = 'Online'; }
+    else if (s.status === 'reconnecting') { dot.classList.remove('online'); label.textContent = 'Reconnecting...'; }
+    else if (s.status === 'launching' || s.status === 'polling') { dot.classList.remove('online'); label.textContent = 'Launching...'; }
+    else { dot.classList.remove('online'); label.textContent = 'Idle'; }
+}
+
+function updateLaunchBtn(i) {
+    const btn = document.getElementById('launch-btn');
+    const s = slots[i];
+    if (s.status === 'live') {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-power-off" style="color:var(--danger)"></i> Terminate';
+        btn.onclick = () => terminateSlot(i);
+    } else if (s.status === 'launching' || s.status === 'polling') {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Launching...';
+        btn.onclick = () => launchSlot(i);
+    } else if (s.status === 'reconnecting') {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Reconnecting...';
+        btn.onclick = () => launchSlot(i);
+    } else {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Launch';
+        btn.onclick = () => launchSlot(i);
+    }
+}
+
+function updatePlanUI() {
+    const plan = currentUser.plan;
+    const p    = PLANS[plan];
+    const badge = document.getElementById('topbar-plan-badge');
+    badge.textContent  = plan.toUpperCase();
+    badge.className    = `plan-badge plan-${plan}`;
+    renderPlanLimitsBar(p);
+    updateFilesPanel();
+}
+
+function renderPlanLimitsBar(p) {
+    document.getElementById('plan-limits-bar').innerHTML = `
+        <div class="limit-item"><div class="limit-label">Plan</div><div class="limit-val">${currentUser.plan.charAt(0).toUpperCase()+currentUser.plan.slice(1)}</div></div>
+        <div class="limit-item"><div class="limit-label">CPU</div><div class="limit-val">${p.cpu} core${p.cpu>1?'s':''}</div></div>
+        <div class="limit-item"><div class="limit-label">RAM</div><div class="limit-val">${p.ram>=1024?p.ram/1024+'GB':p.ram+'MB'}</div></div>
+        <div class="limit-item"><div class="limit-label">Session</div><div class="limit-val">${p.session/3600}h</div></div>
+        <div class="limit-item"><div class="limit-label">VPS Slots</div><div class="limit-val">${p.slots}</div></div>
+        <div class="limit-item"><div class="limit-label">Storage</div><div class="limit-val">${p.storage?p.storage+'MB temp':'None'}</div></div>
+        <div class="limit-item"><div class="limit-label">File Manager</div><div class="limit-val">${p.fm?'<span style="color:var(--green)">✓ Included</span>':'<span style="color:var(--dim)">✗ Locked</span>'}</div></div>
+    `;
+}
+
+function updateFilesPanel() {
+    if (!currentUser) return;
+    const hasFM = PLANS[currentUser.plan].fm;
+    document.getElementById('fm-locked').classList.toggle('hidden', hasFM);
+    document.getElementById('fm-content').classList.toggle('hidden', !hasFM);
+}
+
+function showPanel(name) {
+    document.querySelectorAll('.panel-page').forEach(p=>p.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    document.getElementById('panel-'+name).classList.add('active');
+    document.getElementById('nav-'+name).classList.add('active');
+}
+
+// ════════════════════════════ LAUNCH ════════════════════════════
+function launchActiveSlot() { launchSlot(activeSlotIdx); }
+
+// ════════════════════════════ TERMINATE ═════════════════════════
+async function terminateSlot(i) {
+    const s = slots[i];
+    if (!s || s.status !== 'live') return;
+
+    if (!confirm('Terminate this VPS session? Your container will be destroyed.')) return;
+
+    logSlot(i, '\n[Terminating] Destroying container...', 'text-danger');
+
+    // 1. Tell the server this is an explicit kill (not a reconnectable disconnect)
+    try {
+        if (s.socket && s.socket.readyState === WebSocket.OPEN) {
+            s.socket.send(JSON.stringify({cmd: '__kill_session__'}));
+            s.socket.close(4100, 'User terminated');
+        }
+    } catch(e) {}
+
+    // 2. Call /api/vps?action=kill_session to free resources in Redis
+    try {
+        await fetch('/api/vps?action=kill_session', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({session_id: s.sessionId})
+        });
+    } catch(e) {}
+
+    // 3. Reset slot state
+    s.status = 'idle';
+    s.sessionExpiry = null;
+    s.tunnelUrl = null;
+    s.socket = null;
+    updateSlotDot(i);
+    if (i === activeSlotIdx) { updateLaunchBtn(i); updateTopbarStatus(i); }
+    stopSlotCountdown(i);
+    stopSlotMetrics(i);
+    logSlot(i, '[Session Terminated] Resources freed.', 'text-danger');
+    saveSlots();
+}
+
+async function launchSlot(i) {
+    if (!currentUser) { openAuthModal(); return; }
+    const s = slots[i];
+    if (s.status === 'live' || s.status === 'launching' || s.status === 'polling') return;
+
+    s.status = 'launching';
+    s.sessionId = 'u-' + crypto.randomUUID();
+    s.sessionExpiry = null;
+    s.tunnelUrl = null;
+    updateSlotDot(i);
+    if (i === activeSlotIdx) updateLaunchBtn(i);
+
+    logSlot(i, 'Provisioning container...', 'text-dim');
+
+    try {
+        const r = await fetch('/api/vps?action=launch', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({session_id: s.sessionId})
+        });
+        const d = await r.json();
+
+        if (d.status === 'success' && d.tunnel_url) {
+            // ── FAST PATH: Runner available, connect immediately ──
+            s.sessionExpiry = new Date(d.expires).getTime();
+            s.tunnelUrl = d.tunnel_url.replace('https://', 'wss://');
+            saveSlots();
+            startSlotCountdown(i);
+            logSlot(i, `Plan: ${d.plan} | Expires: ${d.expires}`, 'text-dim');
+            logSlot(i, 'Runner available — connecting...', 'text-green');
+            connectSlotWS(i, s.tunnelUrl, false);
+
+        } else if (d.status === 'queued') {
+            // ── SLOW PATH: No runner yet, poll /api/vps?action=check_session ──
+            s.sessionExpiry = new Date(d.expires).getTime();
+            s.status = 'polling';
+            updateSlotDot(i);
+            if (i === activeSlotIdx) updateLaunchBtn(i);
+            saveSlots();
+            startSlotCountdown(i);
+            logSlot(i, `Plan: ${d.plan} | Expires: ${d.expires}`, 'text-dim');
+            logSlot(i, 'Launching shared runner — please wait...', 'text-dim');
+            startSessionPolling(i);
+
+        } else {
+            s.status = 'idle';
+            updateSlotDot(i);
+            if (i === activeSlotIdx) updateLaunchBtn(i);
+            logSlot(i, 'Error: ' + (d.msg || 'Unknown error'), 'text-danger');
+        }
+    } catch(e) {
+        s.status = 'idle';
+        updateSlotDot(i);
+        if (i === activeSlotIdx) updateLaunchBtn(i);
+        logSlot(i, 'Error: Could not reach launch server.', 'text-danger');
+    }
+}
+
+// ── Poll /api/vps?action=check_session (Redis-backed) instead of GitHub raw files ──
+async function startSessionPolling(i) {
+    const s = slots[i];
+    let attempts = 0;
+    const poll = setInterval(async () => {
+        attempts++;
+        if (attempts > 90) {  // ~4.5 min timeout
+            clearInterval(poll);
+            s.status = 'idle';
+            updateSlotDot(i);
+            if (i === activeSlotIdx) { updateLaunchBtn(i); updateTopbarStatus(i); }
+            logSlot(i, 'Timeout — runner took too long. Try again.', 'text-danger');
+            return;
+        }
+        try {
+            // Bug 1 fixed: use & not ? for the second query parameter
+            const r = await fetch(`/api/vps?action=check_session&session_id=${s.sessionId}`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('auth_token')}` }
+            });
+            const d = await r.json();
+            // Bug 2 fixed: backend returns 'active', not 'ready'
+            if (d.status === 'active' && d.tunnel_url) {
+                clearInterval(poll);
+                s.tunnelUrl = d.tunnel_url.replace('https://', 'wss://');
+                if (d.expires_at) s.sessionExpiry = d.expires_at * 1000;
+                saveSlots();
+                logSlot(i, 'Runner ready — connecting...', 'text-green');
+                connectSlotWS(i, s.tunnelUrl, false);
+            } else if (d.status === 'queued') {
+                const pos = d.queue_position || '?';
+                if (attempts % 5 === 0) logSlot(i, `Still waiting for runner... (queue position: ${pos})`, 'text-dim');
+            }
+        } catch(e) {}
+    }, 3000);
+}
+
+// ════════════════════════════ WEBSOCKET (per-slot) ════════════════════════════
+function connectSlotWS(i, url, isReconnect) {
+    const s = slots[i];
+    s.tunnelUrl = url;
+    s.status = isReconnect ? 'reconnecting' : 'polling';
+    // Reset retry delay on fresh connect (not reconnect)
+    if (!isReconnect) s.retryDelay = 1000;
+    updateSlotDot(i);
+    if (i === activeSlotIdx) { updateLaunchBtn(i); updateTopbarStatus(i); }
+
+    logSlot(i, (isReconnect ? 'Reconnecting: ' : 'Connecting: ') + url, 'text-dim');
+
+    s.socket = new WebSocket(url);
+
+    s.socket.onopen = () => {
+        // ── Send auth handshake (identify session to shared server) ──
+        s.socket.send(JSON.stringify({type:'auth', session_id: s.sessionId}));
+
+        // Reset exponential backoff on successful connect
+        s.retryDelay = 1000;
+        s.pongReceived = true;
+
+        s.status = 'live';
+        updateSlotDot(i);
+        if (i === activeSlotIdx) { updateLaunchBtn(i); updateTopbarStatus(i); }
+
+        const inp = document.getElementById(`slot-input-${i}`);
+        if (inp) { inp.disabled = false; inp.placeholder = 'Type command...'; }
+        if (i === activeSlotIdx && inp) inp.focus();
+
+        if (!isReconnect) {
+            const out = document.getElementById(`slot-out-${i}`);
+            if (out) out.innerHTML = '';
+            logSlot(i, "    _   _                       ___ _                 _", 'text-blue');
+            logSlot(i, "   /_\\ | |__ ___ ___ _ _ __ _ / __| |___ _  _ __| |", 'text-blue');
+            logSlot(i, "  / _ \\| '_ (_-</ _ \\ '_/ _` | (__| / _ \\ || / _` |", 'text-blue');
+            logSlot(i, " /_/ \\_\\_.__/__/\\___/_| \\__,_|\\___|_\\___/\\_,_\\__,_|", 'text-blue');
+            logSlot(i, '', '');
+            logSlot(i, `Welcome to AbsoraCloud VPS — ${PLANS[currentUser.plan].name} Plan (Slot ${i+1})`, 'text-green');
+            logSlot(i, `CPU: ${PLANS[currentUser.plan].cpu} core(s) | RAM: ${PLANS[currentUser.plan].ram >= 1024 ? PLANS[currentUser.plan].ram/1024+'GB' : PLANS[currentUser.plan].ram+'MB'}`, 'text-dim');
+            logSlot(i, '─────────────────────────────────────────────────────', 'text-dim');
+        } else {
+            logSlot(i, '[Reconnected] Session resumed.', 'text-green');
+        }
+        startSlotMetrics(i);
+        startHeartbeat(i);
+    };
+
+    s.socket.onmessage = (e) => {
+        try {
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'terminal') logSlot(i, msg.data);
+            else if (msg.type === 'clear') { const o = document.getElementById(`slot-out-${i}`); if(o) o.innerHTML=''; }
+            else if (msg.type === 'cwd') {
+                const short = msg.data.replace('/home/runner','~').replace('/root','~');
+                const pr = document.getElementById(`slot-prompt-${i}`);
+                if (pr) pr.textContent = `root@absoracloud:${short}# `;
+            }
+            else if (msg.type === 'metrics' && i === activeSlotIdx) updateMetrics(msg.data, i);
+            else if (msg.type === 'file_list') renderFileList(msg.data);
+            else if (msg.type === 'file_content') loadFileContent(msg.data);
+            else if (msg.type === '__pong__') { s.pongReceived = true; }
+        } catch(_) {}
+    };
+
+    s.socket.onclose = (event) => {
+        const inp = document.getElementById(`slot-input-${i}`);
+        if (inp) inp.disabled = true;
+        stopSlotMetrics(i);
+        stopHeartbeat(i);
+
+        // Code 4100 = explicit user kill — don't reconnect
+        if (event.code === 4100) return;
+
+        const timeLeft = s.sessionExpiry ? s.sessionExpiry - Date.now() : 0;
+        if (timeLeft > 5000 && s.tunnelUrl) {
+            s.status = 'reconnecting';
+            updateSlotDot(i);
+            if (i === activeSlotIdx) { updateLaunchBtn(i); updateTopbarStatus(i); }
+            // Exponential backoff: 1s → 2s → 4s → ... → max 30s
+            if (!s.retryDelay) s.retryDelay = 1000;
+            logSlot(i, `\n[Connection lost] Reconnecting in ${s.retryDelay/1000}s...`, 'text-dim');
+            setTimeout(() => {
+                if (s.sessionExpiry && Date.now() < s.sessionExpiry) connectSlotWS(i, s.tunnelUrl, true);
+            }, s.retryDelay);
+            s.retryDelay = Math.min(s.retryDelay * 2, 30000);
+        } else {
+            s.status = 'idle';
+            s.sessionExpiry = null;
+            s.tunnelUrl = null;
+            updateSlotDot(i);
+            if (i === activeSlotIdx) { updateLaunchBtn(i); updateTopbarStatus(i); }
+            logSlot(i, '\n[Session Ended]', 'text-danger');
+            stopSlotCountdown(i);
+            saveSlots();
+        }
+    };
+
+    s.socket.onerror = () => logSlot(i, 'WebSocket error.', 'text-danger');
+}
+
+// ── Heartbeat ping/pong watchdog — detects dead sessions ──────────────────
+function startHeartbeat(i) {
+    stopHeartbeat(i);
+    const s = slots[i];
+    s.heartbeatTimer = setInterval(() => {
+        if (!s.socket || s.socket.readyState !== WebSocket.OPEN) return;
+        s.pongReceived = false;
+        s.socket.send(JSON.stringify({ cmd: '__ping__' }));
+        setTimeout(() => {
+            if (s && !s.pongReceived && s.status === 'live') {
+                logSlot(i, '[Heartbeat] No response — session may be lost. Reconnecting...', 'text-danger');
+                try { s.socket.close(); } catch(_) {}
+            }
+        }, 5000);
+    }, 20000);
+}
+function stopHeartbeat(i) {
+    const s = slots[i];
+    if (s?.heartbeatTimer) { clearInterval(s.heartbeatTimer); s.heartbeatTimer = null; }
+}
+
+function handleSlotEnter(e, i) {
+    if (e.key !== 'Enter') return;
+    const inp = document.getElementById(`slot-input-${i}`);
+    const cmd = inp?.value.trim();
+    if (!cmd) return;
+    const s = slots[i];
+    if (!s?.socket || s.socket.readyState !== WebSocket.OPEN) return;
+    logSlot(i, 'root@absoracloud:~# ' + cmd, 'text-dim');
+    s.socket.send(JSON.stringify({cmd}));
+    inp.value = '';
+}
+
+function logSlot(i, text, cls='') {
+    const out = document.getElementById(`slot-out-${i}`);
+    if (!out) return;
+    const d = document.createElement('div');
+    d.textContent = text;
+    if (cls) d.classList.add(cls);
+    if (cls === 'text-blue') d.style.whiteSpace = 'pre';
+    out.appendChild(d);
+    out.scrollTop = out.scrollHeight;
+}
+
+// ════════════════════════════ METRICS & TIMERS (per-slot) ════════════════════════════
+function startSlotMetrics(i) {
+    stopSlotMetrics(i);
+    const s = slots[i];
+    s.metricsTimer = setInterval(() => {
+        if (s.socket && s.socket.readyState === WebSocket.OPEN)
+            s.socket.send(JSON.stringify({cmd:'__metrics__'}));
+    }, 3000);
+}
+function stopSlotMetrics(i) {
+    const s = slots[i];
+    if (s?.metricsTimer) { clearInterval(s.metricsTimer); s.metricsTimer = null; }
+}
+
+function startSlotCountdown(i) {
+    stopSlotCountdown(i);
+    const s = slots[i];
+    s.countdownTimer = setInterval(() => {
+        if (!s.sessionExpiry) return;
+        const rem = Math.max(0, s.sessionExpiry - Date.now());
+        // Only update the metrics panel if this is the active slot
+        if (i === activeSlotIdx) {
+            const h = Math.floor(rem/3600000), m = Math.floor((rem%3600000)/60000), sec = Math.floor((rem%60000)/1000);
+            const tv = document.getElementById('time-val');
+            const ts = document.getElementById('time-sub');
+            const bar = document.getElementById('time-bar');
+            if (tv) tv.textContent = `${h}h ${m}m ${sec}s`;
+            if (ts) ts.textContent = 'remaining';
+            if (bar) {
+                const totalMs = (PLANS[currentUser?.plan]?.session ?? 3600) * 1000;
+                const pct = totalMs > 0 ? (rem / totalMs * 100) : 0;
+                bar.style.width = pct + '%';
+                bar.style.background = pct < 20 ? 'var(--red)' : pct < 50 ? 'var(--amber)' : 'var(--green)';
+            }
+        }
+        if (rem === 0) {
+            clearInterval(s.countdownTimer);
+            if (i === activeSlotIdx) {
+                const ts = document.getElementById('time-sub');
+                if (ts) ts.textContent = 'Session expired';
+            }
+        }
+    }, 1000);
+}
+function stopSlotCountdown(i) {
+    const s = slots[i];
+    if (s?.countdownTimer) { clearInterval(s.countdownTimer); s.countdownTimer = null; }
+}
+
+// Legacy shims for metrics panel (uses active slot's socket for FM commands)
+function startMetricsPolling() { startSlotMetrics(activeSlotIdx); }
+function stopMetricsPolling()  { stopSlotMetrics(activeSlotIdx); }
+function startCountdown()      { startSlotCountdown(activeSlotIdx); }
+function stopCountdown()       { stopSlotCountdown(activeSlotIdx); }
+
+// ════════════════════════════ METRICS ════════════════════════════
+function initCharts() {
+    const mkChart = (id, color) => {
+        const ctx = document.getElementById(id);
+        if (!ctx) return null;
+        return new Chart(ctx, {
+            type:'line',
+            data:{labels:Array(20).fill(''),datasets:[{data:Array(20).fill(0),borderColor:color,borderWidth:1.5,fill:true,backgroundColor:color+'18',tension:.4,pointRadius:0}]},
+            options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+                scales:{x:{display:false},y:{display:false,min:0,max:100}},animation:{duration:300}}
+        });
+    };
+    cpuChart  = mkChart('cpu-chart',  '#3b82f6');
+    ramChart  = mkChart('ram-chart',  '#8b5cf6');
+    diskChart = mkChart('disk-chart', '#06b6d4');
+}
+
+function updateMetrics(data, slotIdx) {
+    const s = slots[slotIdx ?? activeSlotIdx];
+    const cpu  = data.cpu  ?? 0;
+    const ram  = data.ram  ?? 0;
+    const disk = data.disk ?? 0;
+    const ramMB = data.ram_mb ?? 0;
+
+    document.getElementById('cpu-val').textContent  = cpu + '%';
+    document.getElementById('ram-val').textContent  = ram + '%';
+    document.getElementById('disk-val').textContent = disk + '%';
+    document.getElementById('cpu-sub').textContent  = `${PLANS[currentUser.plan].cpu} core(s) allocated`;
+    document.getElementById('ram-sub').textContent  = `${ramMB}MB / ${PLANS[currentUser.plan].ram}MB`;
+    document.getElementById('disk-sub').textContent = `${disk}% of temp storage used`;
+
+    if (s) {
+        s.cpuHistory.push(cpu); s.cpuHistory.shift();
+        s.ramHistory.push(ram); s.ramHistory.shift();
+    }
+    if (cpuChart)  { cpuChart.data.datasets[0].data  = [...(s?.cpuHistory ?? Array(20).fill(0))]; cpuChart.update('none'); }
+    if (ramChart)  { ramChart.data.datasets[0].data  = [...(s?.ramHistory ?? Array(20).fill(0))]; ramChart.update('none'); }
+    if (diskChart) { diskChart.data.datasets[0].data = Array(20).fill(disk); diskChart.update('none'); }
+}
+
+// ════════════════════════════ FILE MANAGER ════════════════════════════
+function activeSocket() {
+    const s = slots[activeSlotIdx];
+    return (s?.socket?.readyState === WebSocket.OPEN) ? s.socket : null;
+}
+
+function fmRefresh() {
+    const sock = activeSocket();
+    if (!sock) return;
+    sock.send(JSON.stringify({cmd:'__fm_list__'}));
+}
+function renderFileList(files) {
+    const list = document.getElementById('fm-file-list');
+    list.innerHTML = '';
+    (files||[]).forEach(f => {
+        const el = document.createElement('div');
+        el.className = 'fm-file' + (selectedFile===f?' active':'');
+        el.innerHTML = `<i class="fa-solid fa-file-code"></i>${f}`;
+        el.onclick = () => { selectedFile = f; fmOpen(f); };
+        list.appendChild(el);
+    });
+}
+function fmOpen(filename) {
+    const sock = activeSocket();
+    if (!sock) return;
+    selectedFile = filename;
+    document.getElementById('fm-filename').textContent = filename;
+    sock.send(JSON.stringify({cmd:`__fm_read__ ${filename}`}));
+}
+function loadFileContent(data) {
+    document.getElementById('fm-editor').value = data.content || '';
+    document.getElementById('fm-status').textContent = 'Loaded';
+}
+function fmSave() {
+    const sock = activeSocket();
+    if (!sock || !selectedFile) return;
+    const content = document.getElementById('fm-editor').value;
+    sock.send(JSON.stringify({cmd:`__fm_write__ ${selectedFile}`, content}));
+    document.getElementById('fm-status').textContent = 'Saved ✓';
+    setTimeout(()=>document.getElementById('fm-status').textContent='', 2000);
+}
+function fmRun() {
+    const sock = activeSocket();
+    if (!sock || !selectedFile) return;
+    showPanel('terminal');
+    switchSlot(activeSlotIdx);
+    const ext = selectedFile.split('.').pop();
+    const runners = {py:'python3', js:'node', sh:'bash', rb:'ruby', php:'php'};
+    const runner  = runners[ext] || 'bash';
+    sock.send(JSON.stringify({cmd:`${runner} /tmp/fm/${selectedFile}`}));
+}
+function fmNewFile() {
+    const name = prompt('File name (e.g. script.py):');
+    if (!name) return;
+    selectedFile = name;
+    document.getElementById('fm-filename').textContent = name;
+    document.getElementById('fm-editor').value = '';
+}
+function fmUpload(input) {
+    const file = input.files[0];
+    const sock = activeSocket();
+    if (!file || !sock) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        sock.send(JSON.stringify({cmd:`__fm_write__ ${file.name}`, content: e.target.result}));
+        toast(`Uploaded ${file.name}`, 'success');
+        setTimeout(fmRefresh, 500);
+    };
+    reader.readAsText(file);
+}
+
+// ════════════════════════════ PLANS ════════════════════════════
+function renderPlansGrid(containerId, inDashboard) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    const order = ['free','basic','pro','enterprise'];
+    const colors = {free:'#64748b', basic:'#3b82f6', pro:'#8b5cf6', enterprise:'#f59e0b'};
+
+    order.forEach(key => {
+        const p   = PLANS[key];
+        const cur = currentUser && currentUser.plan === key;
+        const card = document.createElement('div');
+        card.className = 'plan-card' + (cur?' current':'');
+        card.style.setProperty('--pc', colors[key]);
+        card.innerHTML = `
+            <style>#${containerId} .plan-card:nth-child(${order.indexOf(key)+1})::before{background:${colors[key]}}</style>
+            ${key==='pro'?'<div class="popular-tag">Popular</div>':''}
+            <div class="plan-name" style="color:${colors[key]}">${p.name}</div>
+            <div class="plan-price">${p.price?'₹'+p.price:'Free'}<span>${p.price?'/mo':' forever'}</span></div>
+            <ul class="plan-features">
+                <li><i class="fa-solid fa-check"></i>${p.cpu} CPU core${p.cpu>1?'s':''}</li>
+                <li><i class="fa-solid fa-check"></i>${p.ram>=1024?p.ram/1024+'GB':p.ram+'MB'} RAM</li>
+                <li><i class="fa-solid fa-check"></i>${p.session/3600}h session</li>
+                <li><i class="fa-solid fa-check"></i>${p.slots} concurrent slots</li>
+                <li class="${p.fm?'':'no'}"><i class="fa-solid fa-${p.fm?'check':'xmark'}"></i>File Manager</li>
+                <li class="${p.storage?'':'no'}"><i class="fa-solid fa-${p.storage?'check':'xmark'}"></i>${p.storage?p.storage+'MB temp storage':'No storage'}</li>
+            </ul>
+            <button class="plan-cta ${cur?'current-plan':'upgrade'}" onclick="${cur?'':inDashboard?`openPayModal('${key}')`:`openAuthForPlan('${key}')`}">
+                ${cur?'Current Plan':'Upgrade →'}
+            </button>
+        `;
+        container.appendChild(card);
+    });
+}
+
+function showPlansPage() {
+    document.getElementById('landing-plans').classList.remove('hidden');
+    renderPlansGrid('landing-plans-grid', false);
+}
+function hideLandingPlans() {
+    document.getElementById('landing-plans').classList.add('hidden');
+}
+function openAuthForPlan(plan) {
+    openAuthModal();
+}
+
+// ════════════════════════════ PAYMENT ════════════════════════════
+let payingForPlan = null;
+function openPayModal(plan) {
+    payingForPlan = plan;
+    const p = PLANS[plan];
+    document.getElementById('pay-plan-name').textContent = `Upgrading to ${p.name}`;
+    document.getElementById('pay-amount').textContent = `₹${p.price}`;
+    document.getElementById('pay-modal').classList.remove('hidden');
+    document.getElementById('upload-label').textContent = 'Click to upload payment screenshot';
+    document.getElementById('pay-error').textContent = '';
+}
+function closePayModal() {
+    document.getElementById('pay-modal').classList.add('hidden');
+    payingForPlan = null;
+}
+function handleFileSelect(input) {
+    if (input.files[0])
+        document.getElementById('upload-label').textContent = '✓ ' + input.files[0].name;
+}
+async function submitPayment() {
+    if (!payingForPlan) return;
+    const btn  = document.getElementById('pay-submit-btn');
+    const file = document.getElementById('ss-upload').files[0];
+    btn.disabled = true; btn.textContent = 'Submitting...';
+
+    const fd = new FormData();
+    fd.append('action', 'submit');
+    fd.append('plan', payingForPlan);
+    if (file) fd.append('screenshot', file);
+
+    try {
+        const r = await fetch('/api/payment', {method:'POST', body:fd});
+        const d = await r.json();
+        if (d.status === 'success') {
+            closePayModal();
+            toast(d.msg, 'success');
+            // For demo — auto-upgrade without checking payment
+            await upgradeDemo(payingForPlan);
+        } else {
+            document.getElementById('pay-error').textContent = d.msg;
+        }
+    } catch(e) {
+        document.getElementById('pay-error').textContent = 'Error submitting.';
+    }
+    btn.disabled = false; btn.textContent = 'Submit for Review';
+}
+
+async function upgradeDemo(plan) {
+    // Demo mode: upgrade immediately without payment verification
+    try {
+        const r = await fetch('/api/auth', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({action:'upgrade', plan})
+        });
+        const d = await r.json();
+        if (d.status === 'success') {
+            currentUser.plan = plan;
+            updatePlanUI();
+            renderPlansGrid('plans-grid', true);
+            toast(`Upgraded to ${PLANS[plan].name}! 🎉`, 'success');
+        }
+    } catch(e) {}
+}
+
+// ════════════════════════════ TOAST ════════════════════════════
+let toastTimer;
+function toast(msg, type='success') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className   = 'show ' + type;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
+}
+</script>
+</body>
+</html>

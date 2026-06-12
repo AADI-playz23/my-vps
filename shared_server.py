@@ -23,6 +23,8 @@ import http
 import time
 import uuid
 import urllib.request
+import datetime
+import logging
 
 # ── Config ────────────────────────────────────────────────────
 RUNNER_TOTAL_CPU = 4.0
@@ -54,6 +56,21 @@ sessions = {}
 
 
 # ═══════════════════════════════════════════════════════════════
+#  STRUCTURED LOGGING
+# ═══════════════════════════════════════════════════════════════
+
+def log(level, event, **kwargs):
+    """Emit a structured JSON log line to stdout."""
+    print(json.dumps({
+        'ts':     datetime.datetime.utcnow().isoformat() + 'Z',
+        'level':  level,
+        'event':  event,
+        'runner': RUNNER_ID,
+        **kwargs
+    }), flush=True)
+
+
+# ═══════════════════════════════════════════════════════════════
 #  REDIS HELPERS
 # ═══════════════════════════════════════════════════════════════
 
@@ -74,7 +91,7 @@ def redis_exec(args):
             result = json.loads(resp.read().decode())
             return result.get('result')
     except Exception as e:
-        print(f"[Redis] Error: {e}")
+        log('error', 'redis_error', error=str(e))
         return None
 
 
@@ -131,7 +148,10 @@ def register_runner():
     }
     redis_set_json(f"runner:{RUNNER_ID}", runner_data, ex=21600)
     redis_set(f"heartbeat:{RUNNER_ID}", "1", ex=60)
-    print(f"[Runner] Registered: {RUNNER_ID} (universal, {RUNNER_TOTAL_CPU} CPU, {RUNNER_TOTAL_RAM}MB RAM)")
+    # Track in active_runners SET for O(1) member lookup (replaces KEYS *)
+    redis_exec(["SADD", "active_runners", RUNNER_ID])
+    log('info', 'runner_registered', tunnel_url=TUNNEL_URL,
+        cpu=RUNNER_TOTAL_CPU, ram_mb=RUNNER_TOTAL_RAM)
 
 
 def sync_runner_to_redis():
@@ -148,10 +168,16 @@ def sync_runner_to_redis():
 
 
 def update_runner_tunnel(url):
+    """Set the tunnel URL and register/update the runner in Redis.
+    
+    Bug 3 fix: register_runner() is now called only after the tunnel URL
+    is known, preventing a race condition where the runner was registered
+    with an empty tunnel_url during startup.
+    """
     global TUNNEL_URL
     TUNNEL_URL = url
-    sync_runner_to_redis()
-    print(f"[Runner] Tunnel URL set: {url}")
+    register_runner()   # only called after tunnel URL is set
+    log('info', 'tunnel_url_set', tunnel_url=url)
 
 
 async def heartbeat_loop():
@@ -159,6 +185,32 @@ async def heartbeat_loop():
         redis_set(f"heartbeat:{RUNNER_ID}", "1", ex=60)
         sync_runner_to_redis()
         await asyncio.sleep(30)
+
+
+async def idle_watchdog():
+    """Shut down the runner after 10 consecutive minutes with no active sessions.
+    
+    This prevents wasting GitHub Actions quota when all users have disconnected
+    before the 6-hour hard limit is reached.
+    """
+    IDLE_LIMIT = 600  # 10 minutes
+    idle_since = None
+    while True:
+        await asyncio.sleep(60)
+        if len(sessions) == 0:
+            if idle_since is None:
+                idle_since = time.time()
+                log('info', 'idle_watchdog_started')
+            elif time.time() - idle_since > IDLE_LIMIT:
+                log('warn', 'idle_shutdown', idle_seconds=int(time.time() - idle_since))
+                # Clean up Redis before exiting
+                redis_exec(["DEL", f"runner:{RUNNER_ID}", f"heartbeat:{RUNNER_ID}"])
+                redis_exec(["SREM", "active_runners", RUNNER_ID])
+                os._exit(0)
+        else:
+            if idle_since is not None:
+                log('info', 'idle_watchdog_reset', sessions=len(sessions))
+            idle_since = None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -593,6 +645,14 @@ async def handler(websocket):
                     await websocket.send(json.dumps({"type": "metrics", "data": stats}))
                 continue
 
+            # Heartbeat ping — respond with pong
+            if cmd == '__ping__':
+                try:
+                    await websocket.send(json.dumps({"type": "__pong__"}))
+                except:
+                    pass
+                continue
+
             # File manager
             if cmd == '__fm_list__':
                 if not fm_enabled:
@@ -644,11 +704,11 @@ async def handler(websocket):
             await docker_exec_stream(container, cmd, current_dir, websocket)
 
     except websockets.exceptions.ConnectionClosedOK:
-        print(f"[-] Disconnected (clean): {session_id}")
+        log('info', 'ws_disconnected_clean', session_id=session_id)
     except websockets.exceptions.ConnectionClosedError as e:
-        print(f"[-] Disconnected (error): {session_id} — {e}")
+        log('warn', 'ws_disconnected_error', session_id=session_id, error=str(e))
     except Exception as e:
-        print(f"[!] Error for {session_id}: {e}")
+        log('error', 'ws_handler_exception', session_id=session_id, error=str(e))
     finally:
         if session_id and session_id in sessions:
             sess = sessions[session_id]
@@ -743,16 +803,19 @@ async def main():
     # Suppress noisy websockets handshake errors (Cloudflare probes)
     logging.getLogger("websockets").setLevel(logging.ERROR)
 
-    print(f"[AbsoraCloud] Universal Shared Server")
-    print(f"[AbsoraCloud] Runner={RUNNER_ID}")
-    print(f"[AbsoraCloud] Capacity: {RUNNER_TOTAL_CPU} CPU, {RUNNER_TOTAL_RAM}MB RAM")
-    print(f"[AbsoraCloud] Serves ALL plans: free/basic/pro/enterprise")
+    log('info', 'server_starting', runner=RUNNER_ID,
+        cpu=RUNNER_TOTAL_CPU, ram_mb=RUNNER_TOTAL_RAM)
+    log('info', 'server_plans', plans=list(PLAN_SPECS.keys()))
 
-    register_runner()
+    # Bug 3 fix: DO NOT call register_runner() here.
+    # It will be called inside update_runner_tunnel() once the
+    # Cloudflare tunnel URL is known, preventing the race condition
+    # that writes an empty tunnel_url into Redis.
 
     asyncio.create_task(heartbeat_loop())
     asyncio.create_task(queue_processor())
     asyncio.create_task(session_expiry_checker())
+    asyncio.create_task(idle_watchdog())
 
     async with websockets.serve(
         handler, "0.0.0.0", 5000,

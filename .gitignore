@@ -1,0 +1,22 @@
+# Real user session data — must NOT be in version control
+sessions/
+
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+
+# Build output
+.vercel/
+dist/
+build/
+
+# OS files
+.DS_Store
+Thumbs.db
