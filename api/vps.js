@@ -76,8 +76,17 @@ export default async function handler(req, res) {
 
       const triggered = githubRes.ok;
 
-      // In a full Redis implementation, you'd push to Upstash list using redisCmd:
-      // await redisCmd(['HSET', `session:${sessionId}`, 'status', 'queued', 'user_id', userId, 'plan', planKey]);
+      const sessionData = {
+        status: 'queued',
+        user_id: userId,
+        plan: planKey,
+        expires_at: Math.floor(expiresAtDate.getTime() / 1000)
+      };
+      await redisCmd(['SET', `session:${sessionId}`, JSON.stringify(sessionData), 'EX', (sessionSecs + 300).toString()]);
+
+      const priorities = { 'free': 100, 'basic': 200, 'pro': 300, 'enterprise': 400 };
+      const score = priorities[planKey] || 100;
+      await redisCmd(['ZADD', 'vps_queue', score.toString(), sessionId]);
       
       return res.status(200).json({
         status: 'queued',
@@ -92,8 +101,19 @@ export default async function handler(req, res) {
       const sessionId = req.query.session_id;
       if (!sessionId) return res.status(400).json({ status: 'error', msg: 'Missing session_id' });
 
-      // Usually fetched from redis via `redisCmd(['HGETALL', 'session:' + sessionId])`
-      // For now, falling back to D1 for session state.
+      const redisRes = await redisCmd(['GET', `session:${sessionId}`]);
+      if (redisRes) {
+        try {
+          const sData = JSON.parse(redisRes);
+          if (sData.status === 'active' && sData.tunnel_url) {
+            // Sync active status to D1 optionally, but return to frontend immediately
+            return res.status(200).json({ status: 'active', tunnel_url: sData.tunnel_url, plan: user.plan });
+          } else if (sData.status === 'queued') {
+            return res.status(200).json({ status: 'queued', plan: user.plan });
+          }
+        } catch(e){}
+      }
+
       const sessions = await queryD1('SELECT * FROM vps_sessions WHERE session_key = ?', [sessionId]);
       if (sessions.length === 0) return res.status(404).json({ status: 'error', msg: 'Session not found' });
       const session = sessions[0];
