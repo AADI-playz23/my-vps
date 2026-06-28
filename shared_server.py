@@ -38,6 +38,123 @@ TUNNEL_URL    = ''  # Set after tunnel starts
 COMMAND_TIMEOUT = 60
 DOCKER_IMAGE    = 'absoracloud-base'
 
+BASE_URL      = os.environ.get('BASE_URL',      'https://absoravps.vercel.app')
+BAN_API_URL   = BASE_URL + "/api/ban_user"
+
+def call_ban_api(session_id, console_dump):
+    try:
+        url = BAN_API_URL
+        payload = {
+            "op": "report_abuse",
+            "session_id": session_id,
+            "console_dump": console_dump
+        }
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            url, data=data,
+            headers={'Content-Type': 'application/json'}
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+    except Exception as e:
+        print(f"[Abuse Scanner] API call failed: {e}")
+        return {"status": "error"}
+
+async def abuse_scanner_loop():
+    print("[Abuse Scanner] Loop started")
+    high_cpu_counts = {}
+
+    while True:
+        await asyncio.sleep(30)
+        try:
+            active_sids = list(sessions.keys())
+            for sid in active_sids:
+                if sid not in sessions:
+                    continue
+                sess = sessions[sid]
+                container = sess.get('container_name')
+                plan = sess.get('plan', 'free')
+
+                blacklist = ['xmrig', 'cgminer', 'ethminer', 'minerd', 'cpuminer', 'masscan', 'nmap']
+                detected_reason = None
+                console_dump = ""
+
+                if container == 'bare-metal':
+                    try:
+                        import psutil
+                        procs = []
+                        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                            try:
+                                name = proc.info['name'] or ''
+                                cmdline = ' '.join(proc.info['cmdline'] or [])
+                                procs.append(f"PID {proc.info['pid']}: {name} ({cmdline})")
+                                for bad in blacklist:
+                                    if bad in name.lower() or bad in cmdline.lower():
+                                        detected_reason = f"Blacklisted process detected: {name}"
+                                        break
+                            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                pass
+                        console_dump = "\n".join(procs)
+                    except Exception as e:
+                        print(f"[Abuse Check] Bare-metal process list check failed: {e}")
+                else:
+                    out, err, rc = await run_cmd(f"docker exec {container} ps aux")
+                    if rc == 0:
+                        console_dump = out
+                        for bad in blacklist:
+                            if bad in out.lower():
+                                detected_reason = f"Blacklisted process detected: {bad}"
+                                break
+
+                if container != 'bare-metal' and not detected_reason:
+                    out, err, rc = await run_cmd(f"docker exec {container} find /root /var/www -type f 2>/dev/null")
+                    if rc == 0:
+                        adult_keywords = ['porn', 'adult', 'xxx', 'sex', 'gamble', 'casino']
+                        for keyword in adult_keywords:
+                            if keyword in out.lower():
+                                detected_reason = f"Adult content or unauthorized file detected: {keyword}"
+                                break
+
+                if not detected_reason:
+                    stats = await get_container_stats(container)
+                    if stats and stats.get('cpu', 0) > 90.0:
+                        if plan in ['free', 'basic']:
+                            count = high_cpu_counts.get(sid, 0) + 1
+                            high_cpu_counts[sid] = count
+                            if count >= 3:
+                                detected_reason = f"Sustained 90%+ CPU usage ({stats.get('cpu')}% CPU) on plan {plan}"
+                        else:
+                            high_cpu_counts[sid] = 0
+                    else:
+                        high_cpu_counts[sid] = 0
+
+                if detected_reason:
+                    print(f"[Abuse Scanner] Abuse suspected for session {sid}: {detected_reason}")
+                    full_dump = f"Reason: {detected_reason}\n\nPlan: {plan}\nContainer: {container}\n\nProcess List / Console:\n{console_dump}"
+                    
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(None, call_ban_api, sid, full_dump)
+                    
+                    if result.get('status') == 'success' and result.get('abuse_detected'):
+                        print(f"[Abuse Scanner] Abuse CONFIRMED by API for {sid}. Terminating.")
+                        await destroy_container(sid)
+                        
+                        ws = sessions[sid].get('websocket')
+                        if ws:
+                            try:
+                                await ws.send(json.dumps({
+                                    "type": "message",
+                                    "data": f"\n\n[SECURITY] ABUSE DETECTED: {detected_reason}\nYour session has been terminated and your account locked.\n"
+                                }))
+                                await ws.close(4100, "Abuse detected")
+                            except: pass
+                            
+                        if sid in sessions:
+                            del sessions[sid]
+                        redis_del(f"session:{sid}")
+        except Exception as e:
+            print(f"[Abuse Scanner] Error: {e}")
+
 # Plan specs (must match db.php)
 PLAN_SPECS = {
     'free':       {'cpu': 0.5, 'ram': 2048,  'storage': 100,  'fm': False, 'session': 3600},
@@ -816,6 +933,7 @@ async def main():
     asyncio.create_task(queue_processor())
     asyncio.create_task(session_expiry_checker())
     asyncio.create_task(idle_watchdog())
+    asyncio.create_task(abuse_scanner_loop())
 
     async with websockets.serve(
         handler, "0.0.0.0", 5000,
