@@ -22,6 +22,16 @@ export default async function handler(req, res) {
     const user = users[0];
     if (!user) return res.status(404).json({ status: 'error', msg: 'User not found' });
 
+    const isBanned = await queryD1('SELECT id FROM bans WHERE username = ? AND service = ?', [user.username, 'vps']);
+    if (isBanned.length > 0) {
+      return res.status(403).json({ status: 'error', msg: 'Your account has been permanently banned from the VPS service for policy violations.' });
+    }
+
+    const lockedUntil = parseInt(user.locked_until || 0);
+    if (lockedUntil > Math.floor(Date.now() / 1000)) {
+      return res.status(403).json({ status: 'locked', msg: 'Your account is temporarily locked for 24 hours.' });
+    }
+
     const action = req.query.action || req.body?.action || '';
     const plans = getPlans();
 
@@ -69,8 +79,11 @@ export default async function handler(req, res) {
 
       let triggered = false;
       if (activeRunners < 3) {
+        const host = req.headers.host || '';
+        const apiProtocol = host.includes('localhost') ? 'http' : 'https';
+        const api_url = `${apiProtocol}://${host}`;
         triggered = await triggerRunner(
-          { event_type: "run-shared", client_payload: { runner_number: activeRunners + 1 } },
+          { event_type: "run-shared", client_payload: { runner_number: activeRunners + 1, api_url } },
           process.env
         );
       }
