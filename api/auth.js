@@ -14,7 +14,8 @@ export default async function handler(req, res) {
 
   try {
     if (action === 'register') {
-      const { username, email, password } = req.body;
+      const { username, email, password, tos } = req.body;
+      if (!tos) return res.status(400).json({ status: 'error', msg: 'You must agree to the Terms of Service, Privacy Policy, and Refund Policy.' });
       if (!username || !email || !password) return res.status(400).json({ status: 'error', msg: 'All fields required' });
       if (username.length < 3) return res.status(400).json({ status: 'error', msg: 'Username too short' });
       if (password.length < 6) return res.status(400).json({ status: 'error', msg: 'Password too short' });
@@ -22,7 +23,7 @@ export default async function handler(req, res) {
       const hash = await bcrypt.hash(password, 10);
       
       try {
-        await executeD1('INSERT INTO users (username, email, password, plan) VALUES (?, ?, ?, ?)', [username, email, hash, 'free']);
+        await executeD1('INSERT INTO users (username, email, password, plan, tos_accepted) VALUES (?, ?, ?, ?, 1)', [username, email, hash, 'free']);
       } catch (err) {
         return res.status(400).json({ status: 'error', msg: 'Username or email already taken.' });
       }
@@ -49,6 +50,25 @@ export default async function handler(req, res) {
       const users = await queryD1('SELECT * FROM users WHERE (username = ? OR email = ?) AND is_active = 1', [login, login]);
       const user = users[0];
       if (!user) return res.status(401).json({ status: 'error', msg: 'Invalid credentials' });
+
+      const isBanned = await queryD1('SELECT id FROM bans WHERE username = ? AND service = ?', [user.username, 'vps']);
+      if (isBanned.length > 0) {
+        return res.status(403).json({ status: 'error', msg: 'Your account has been permanently banned from the VPS service for policy violations.' });
+      }
+
+      const lockedUntil = parseInt(user.locked_until || 0);
+      if (lockedUntil > Math.floor(Date.now() / 1000)) {
+        const warnResult = await queryD1('SELECT reason, screenshot_proof FROM warns WHERE username = ? ORDER BY created_at DESC LIMIT 1', [user.username]);
+        const latestWarn = warnResult[0] || {};
+        return res.status(403).json({
+          status: 'locked',
+          msg: 'Your account is temporarily locked for 24 hours.',
+          locked_until: lockedUntil,
+          reason: latestWarn.reason || 'Policy violation detected',
+          proof: latestWarn.screenshot_proof || '',
+          support_link: 'http://absoracloud.fanclub.rocks'
+        });
+      }
 
       const match = await bcrypt.compare(password, user.password);
       if (!match) return res.status(401).json({ status: 'error', msg: 'Invalid credentials' });
