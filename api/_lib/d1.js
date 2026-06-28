@@ -1,6 +1,7 @@
 export async function queryD1(sql, params = []) {
-  const { CLOUDFLARE_ACCOUNT_ID, D1_DB_3_ID, CLOUDFLARE_API_TOKEN } = process.env;
-  const url = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${D1_DB_3_ID}/query`;
+  const { CLOUDFLARE_ACCOUNT_ID, D1_DB_3_ID, D1_DB_2_ID, D1_DB_1_ID, D1_DB_ID, CLOUDFLARE_API_TOKEN } = process.env;
+  const dbId = D1_DB_3_ID || D1_DB_2_ID || D1_DB_1_ID || D1_DB_ID;
+  const url = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${dbId}/query`;
 
   const res = await fetch(url, {
     method: 'POST',
