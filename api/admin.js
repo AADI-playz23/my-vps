@@ -209,12 +209,39 @@ export default async function handler(req, res) {
             plan TEXT NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )`,
+        `CREATE TABLE IF NOT EXISTS warns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            service TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            screenshot_proof TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`,
+        `CREATE TABLE IF NOT EXISTS bans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            service TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            banned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(username, service)
         )`
       ];
 
       for (const sql of queries) {
         await executeD1(sql);
       }
+
+      try {
+        await executeD1("ALTER TABLE users ADD COLUMN tos_accepted INTEGER DEFAULT 1");
+      } catch (e) {}
+      try {
+        await executeD1("ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0");
+      } catch (e) {}
+      try {
+        await executeD1("ALTER TABLE users ADD COLUMN locked_until INTEGER DEFAULT 0");
+      } catch (e) {}
+
       return res.status(200).json({ status: 'success', msg: 'Database setup completed' });
     }
 
