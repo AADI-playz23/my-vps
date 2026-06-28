@@ -13,6 +13,7 @@ jobs:
       UPSTASH_URL:   ${{ secrets.UPSTASH_URL }}
       UPSTASH_TOKEN: ${{ secrets.UPSTASH_TOKEN }}
       RUNNER_ID:     "runner-${{ github.run_id }}"
+      BASE_URL:      ${{ github.event.client_payload.api_url || 'https://absoravps.vercel.app' }}
 
     steps:
       - uses: actions/checkout@v4
