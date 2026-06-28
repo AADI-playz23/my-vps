@@ -161,6 +161,7 @@ export default async function handler(req, res) {
             email TEXT NOT NULL UNIQUE,
             password TEXT NOT NULL,
             plan TEXT NOT NULL DEFAULT 'free',
+            tos_accepted INTEGER DEFAULT 1,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_login DATETIME,
             is_active INTEGER DEFAULT 1
@@ -209,12 +210,32 @@ export default async function handler(req, res) {
             plan TEXT NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )`,
+        `CREATE TABLE IF NOT EXISTS warns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            service TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            screenshot_proof TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )`
       ];
 
       for (const sql of queries) {
         await executeD1(sql);
       }
+      
+      // Migration: add tos_accepted, banned, locked_until to existing table
+      try {
+        await executeD1("ALTER TABLE users ADD COLUMN tos_accepted INTEGER DEFAULT 1");
+      } catch (e) {}
+      try {
+        await executeD1("ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0");
+      } catch (e) {}
+      try {
+        await executeD1("ALTER TABLE users ADD COLUMN locked_until INTEGER DEFAULT 0");
+      } catch (e) {}
+
       return res.status(200).json({ status: 'success', msg: 'Database setup completed' });
     }
 
