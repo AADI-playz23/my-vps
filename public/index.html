@@ -508,7 +508,7 @@
             </div>
             <div style="margin: 4px 0 12px 0;">
                 <label style="display:flex; align-items:flex-start; gap:10px; font-size:0.82rem; color:var(--dim,#94a3b8); cursor:pointer; line-height:1.5;">
-                    <input type="checkbox" id="tos-check" style="margin-top:3px; accent-color:#6366f1; width:15px; height:15px; flex-shrink:0;">
+                    <input type="checkbox" id="tos-check" onchange="if(this.checked){document.getElementById('reg-error').textContent='';}" style="margin-top:3px; accent-color:#6366f1; width:15px; height:15px; flex-shrink:0;">
                     <span>I agree to the
                         <a href="https://absoracloud.free.je/tos.html" target="_blank" style="color:#6366f1; text-decoration:underline;">Terms of Service</a>,
                         <a href="https://absoracloud.free.je/privacy.html" target="_blank" style="color:#6366f1; text-decoration:underline;">Privacy Policy</a>, and
