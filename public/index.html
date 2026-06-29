@@ -506,6 +506,16 @@
                 <label class="form-label">Password</label>
                 <input class="form-input" type="password" id="reg-pass" placeholder="min. 6 chars">
             </div>
+            <div style="margin: 4px 0 12px 0;">
+                <label style="display:flex; align-items:flex-start; gap:10px; font-size:0.82rem; color:var(--dim,#94a3b8); cursor:pointer; line-height:1.5;">
+                    <input type="checkbox" id="tos-check" style="margin-top:3px; accent-color:#6366f1; width:15px; height:15px; flex-shrink:0;">
+                    <span>I agree to the
+                        <a href="https://absoracloud.free.je/tos.html" target="_blank" style="color:#6366f1; text-decoration:underline;">Terms of Service</a>,
+                        <a href="https://absoracloud.free.je/privacy.html" target="_blank" style="color:#6366f1; text-decoration:underline;">Privacy Policy</a>, and
+                        <a href="https://absoracloud.free.je/refund.html" target="_blank" style="color:#6366f1; text-decoration:underline;">Refund Policy</a>.
+                    </span>
+                </label>
+            </div>
             <button class="form-btn" id="reg-btn" onclick="doRegister()">Create Free Account</button>
             <div class="form-error" id="reg-error"></div>
         </div>
@@ -812,6 +822,11 @@ async function doRegister() {
     const err = document.getElementById('reg-error');
     btn.disabled = true; btn.textContent = 'Creating account...';
     err.textContent = '';
+    if (!document.getElementById('tos-check').checked) {
+        err.textContent = 'Please agree to the Terms of Service, Privacy Policy, and Refund Policy.';
+        btn.disabled = false; btn.textContent = 'Create Free Account';
+        return;
+    }
     try {
         const r = await fetch('/api/auth', {
             method:'POST', headers:{'Content-Type':'application/json'},
