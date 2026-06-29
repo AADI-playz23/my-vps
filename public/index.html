@@ -833,7 +833,8 @@ async function doRegister() {
             body: JSON.stringify({action:'register',
                 username: document.getElementById('reg-user').value,
                 email:    document.getElementById('reg-email').value,
-                password: document.getElementById('reg-pass').value})
+                password: document.getElementById('reg-pass').value,
+                tos:      true})
         });
         const d = await r.json();
         if (d.status === 'success') {
