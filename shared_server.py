@@ -370,6 +370,14 @@ async def queue_processor():
                             s_ram = spec['ram']
 
                             if free_cpu >= s_cpu and free_ram >= s_ram:
+                                # Dedicated VM isolation constraint for Enterprise
+                                if plan == 'enterprise' and len(sessions) > 0:
+                                    # Put back in queue, this VM is already serving other users
+                                    priorities = {'free': 100, 'basic': 200, 'pro': 300, 'enterprise': 400}
+                                    redis_exec(["ZADD", "vps_queue", str(priorities.get(plan, 100)), session_id])
+                                    print(f"[Queue] Enterprise session {session_id} deferred: VM is not empty (active users: {len(sessions)})")
+                                    continue
+
                                 # Accept this session
                                 session['status']     = 'active'
                                 session['runner_id']  = RUNNER_ID
@@ -412,20 +420,6 @@ async def create_container(session_id, plan):
     global used_cpu, used_ram
     name = f"vps-{session_id}"
     spec = PLAN_SPECS.get(plan, PLAN_SPECS['free'])
-
-    # Bare-Metal Enterprise
-    if plan == 'enterprise':
-        # Check resources
-        if used_cpu + spec['cpu'] > RUNNER_TOTAL_CPU or used_ram + spec['ram'] > RUNNER_TOTAL_RAM:
-            print(f"[BareMetal] Not enough resources for enterprise")
-            return None
-        used_cpu += spec['cpu']
-        used_ram += spec['ram']
-        sync_runner_to_redis()
-        # Ensure bare-metal file dir exists
-        await run_cmd("mkdir -p /home/runner/files")
-        print(f"[BareMetal] Assigned: plan=enterprise | Total: {used_cpu}/{RUNNER_TOTAL_CPU} CPU, {used_ram}/{RUNNER_TOTAL_RAM} RAM")
-        return 'bare-metal'
 
     # Check if already exists (reconnection)
     out, _, rc = await run_cmd(f"docker inspect {name} 2>/dev/null")
