@@ -35,7 +35,7 @@ UPSTASH_TOKEN = os.environ.get('UPSTASH_TOKEN', '')
 RUNNER_ID     = os.environ.get('RUNNER_ID', f'runner-{uuid.uuid4().hex[:8]}')
 TUNNEL_URL    = ''  # Set after tunnel starts
 
-COMMAND_TIMEOUT = 60
+COMMAND_TIMEOUT = 300   # apt install / large downloads can take 2-3 minutes
 DOCKER_IMAGE    = 'absoracloud-base'
 
 BASE_URL      = os.environ.get('BASE_URL',      'https://absoravps.vercel.app')
@@ -310,10 +310,10 @@ async def idle_watchdog():
     This prevents wasting GitHub Actions quota when all users have disconnected
     before the 6-hour hard limit is reached.
     """
-    IDLE_LIMIT = 600  # 10 minutes
+    IDLE_LIMIT = 120  # 2 minutes
     idle_since = None
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)
         if len(sessions) == 0:
             if idle_since is None:
                 idle_since = time.time()
@@ -337,6 +337,7 @@ async def idle_watchdog():
 async def queue_processor():
     """Check the priority queue and accept sessions if we have capacity."""
     global TUNNEL_URL
+    poll_sleep = 3
     while True:
         try:
             # DO NOT process queue if we don't know our tunnel URL yet!
@@ -351,6 +352,7 @@ async def queue_processor():
 
             free_cpu = RUNNER_TOTAL_CPU - used_cpu
             free_ram = RUNNER_TOTAL_RAM - used_ram
+            has_processed = False
 
             if free_cpu >= 0.5 and free_ram >= 2048:  # At least a free-tier slot
                 queue_len = redis_zcard('vps_queue')
@@ -375,14 +377,21 @@ async def queue_processor():
                                 ttl = max(60, session.get('expires_at', 0) - int(time.time()))
                                 redis_set_json(f"session:{session_id}", session, ex=ttl + 300)
                                 print(f"[Queue] Activated: {session_id} (plan={plan}, cpu={s_cpu}, ram={s_ram})")
+                                has_processed = True
                             else:
                                 # Not enough resources — put back in queue
                                 priorities = {'free': 100, 'basic': 200, 'pro': 300, 'enterprise': 400}
                                 redis_exec(["ZADD", "vps_queue", str(priorities.get(plan, 100)), session_id])
                                 print(f"[Queue] Not enough resources for {session_id} (need {s_cpu}cpu/{s_ram}ram, have {free_cpu}/{free_ram})")
+
+            if has_processed:
+                poll_sleep = 3
+            else:
+                poll_sleep = min(30, poll_sleep * 1.5)
         except Exception as e:
             print(f"[Queue] Error: {e}")
-        await asyncio.sleep(3)
+            poll_sleep = 3
+        await asyncio.sleep(poll_sleep)
 
 
 # ═══════════════════════════════════════════════════════════════
