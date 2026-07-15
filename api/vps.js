@@ -50,6 +50,28 @@ export default async function handler(req, res) {
 
       await executeD1("UPDATE vps_sessions SET status='expired' WHERE user_id=? AND expires_at <= datetime('now') AND status != 'expired'", [userId]);
 
+      // ── Zombie session cleanup ────────────────────────────────────────────
+      // D1 may still show 'active'/'pending' sessions whose runner has died
+      // (crashed, Redis flushed, tunnel dropped). Check each one's Redis key;
+      // if the key is gone the session is a zombie — expire it immediately so
+      // the slot is freed without waiting for expires_at to pass naturally.
+      const liveSessions = await queryD1(
+        "SELECT session_key FROM vps_sessions WHERE user_id=? AND status IN ('active','pending') AND expires_at > datetime('now')",
+        [userId]
+      );
+      for (const row of liveSessions) {
+        const exists = await redisCmd(['EXISTS', `session:${row.session_key}`]);
+        if (exists === 0) {
+          // No Redis entry → runner is dead → free the slot
+          console.log(`[Zombie] Expiring dead session ${row.session_key} for user ${userId}`);
+          await executeD1(
+            "UPDATE vps_sessions SET status='expired' WHERE session_key=? AND user_id=?",
+            [row.session_key, userId]
+          );
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
       const activeCountRes = await queryD1("SELECT COUNT(*) as cnt FROM vps_sessions WHERE user_id=? AND status IN ('active','pending') AND expires_at > datetime('now')", [userId]);
       const activeCount = activeCountRes[0].cnt;
 
