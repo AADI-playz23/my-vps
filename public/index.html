@@ -1306,6 +1306,8 @@ function connectSlotWS(i, url, isReconnect) {
 }
 
 // ── Heartbeat ping/pong watchdog — detects dead sessions ──────────────────
+// Interval: 45s (apt install can run silently for 60-90s — don't fire mid-install)
+// Pong timeout: 40s  (generous window; server may be busy streaming output)
 function startHeartbeat(i) {
     stopHeartbeat(i);
     const s = slots[i];
@@ -1318,8 +1320,8 @@ function startHeartbeat(i) {
                 logSlot(i, '[Heartbeat] No response — session may be lost. Reconnecting...', 'text-danger');
                 try { s.socket.close(); } catch(_) {}
             }
-        }, 5000);
-    }, 20000);
+        }, 40000);  // 40s pong timeout
+    }, 45000);  // ping every 45s
 }
 function stopHeartbeat(i) {
     const s = slots[i];
